@@ -1,4 +1,4 @@
-# Test Airflow & Superset Дашборд
+# Test Airflow & Superset
 
 Local data infrastructure for automatically collecting user data from the JSONPlaceholder API into a PostgreSQL database and visualizing it in Apache Superset.
 
