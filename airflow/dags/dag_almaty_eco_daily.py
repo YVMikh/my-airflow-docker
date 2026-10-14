@@ -40,7 +40,7 @@ with DAG(
 
         # 1. Выясняем максимальную дату, которая УЖЕ есть в нашей БД
         # Предполагаем, что колонка называется 'date'. Если нет — замените на актуальное имя.
-        check_query = f"SELECT COALESCE(MAX(date), '1970-01-01'::timestamp) FROM {TARGET_TABLE};"
+        check_query = f"SELECT COALESCE(MAX(datetime_utc::timestamp), '1970-01-01'::timestamp) FROM {TARGET_TABLE};"
 
         with engine.connect() as connection:
             max_db_date_raw = connection.execute(check_query).scalar()
