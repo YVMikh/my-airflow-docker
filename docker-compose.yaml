@@ -1,310 +1,121 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
-#
+from datetime import datetime, timedelta
+import requests
+from airflow import DAG
+from airflow.decorators import task
+from airflow.operators.empty import EmptyOperator
+from airflow.providers.postgres.hooks.postgres import PostgresHook
 
-# Basic Airflow cluster configuration for CeleryExecutor with Redis and PostgreSQL.
-#
-# WARNING: This configuration is for local development. Do not use it in a production deployment.
-#
-# This configuration supports basic configuration using environment variables or an .env file
-# The following variables are supported:
-#
-# AIRFLOW_IMAGE_NAME           - Docker image name used to run Airflow.
-#                                Default: apache/airflow:2.2.4
-# AIRFLOW_UID                  - User ID in Airflow containers
-#                                Default: 50000
-# Those configurations are useful mostly in case of standalone testing/running Airflow in test/try-out mode
-#
-# _AIRFLOW_WWW_USER_USERNAME   - Username for the administrator account (if requested).
-#                                Default: airflow
-# _AIRFLOW_WWW_USER_PASSWORD   - Password for the administrator account (if requested).
-#                                Default: airflow
-# _PIP_ADDITIONAL_REQUIREMENTS - Additional PIP requirements to add when starting all containers.
-#                                Default: ''
----
-# version: '3'
-x-airflow-common:
-  &airflow-common
-  # In order to add custom dependencies or upgrade provider packages you can use your extended image.
-  # Comment the image line, place your Dockerfile in the directory where you placed the docker-compose.yaml
-  # and uncomment the "build" line below, Then run `docker-compose build` to build the images.
-  image: ${AIRFLOW_IMAGE_NAME:-apache/airflow:2.10.5}
-  # build: .
-  environment:
-    &airflow-common-env
-    AIRFLOW__CORE__EXECUTOR: CeleryExecutor
-    AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
-    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:airflow@airflow-postgres/airflow
-    AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
-    AIRFLOW__CORE__FERNET_KEY: ''
-    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
-    AIRFLOW__CORE__LOAD_EXAMPLES: 'true'
-    AIRFLOW__API__AUTH_BACKEND: 'airflow.api.auth.backend.basic_auth'
-    AIRFLOW__CORE__ENABLE_XCOM_PICKLING: 'true'
-    AIRFLOW__CORE__TEST_CONNECTION: 'Enabled'
-    _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-}
-  volumes:
-    - ./airflow/dags:/opt/airflow/dags
-    - ./airflow/logs:/opt/airflow/logs
-    - ./airflow/plugins:/opt/airflow/plugins
-  user: "${AIRFLOW_UID:-50000}:0"
-  depends_on:
-    &airflow-common-depends-on
-    redis:
-      condition: service_healthy
-    airflow-postgres:
-      condition: service_healthy
+POSTGRES_CONN_ID = "postgres_almaty_eco"
 
-x-superset-image: &superset-image apache/superset:1.4.1
-x-superset-depends-on: &superset-depends-on
-  - db
-  - redis
-x-superset-volumes: &superset-volumes
-  # /app/pythonpath_docker will be appended to the PYTHONPATH in the final container
-  - ./superset/docker:/app/docker
-  - superset_home:/app/superset_home
+default_args = {
+    'owner': 'yvmikh',
+    'depends_on_past': False,
+    'email_on_failure': False,
+    'retries': 2,
+    'retry_delay': timedelta(minutes=5),
+}
 
+with DAG(
+        'almaty_daily_postgres_etl',
+        default_args=default_args,
+        description='Ежедневный ETL с проверкой наличия вчерашних данных',
+        schedule_interval='5 0 * * *',  # Каждый день в 00:05
+        start_date=datetime(2026, 10, 1),
+        catchup=True,
+        max_active_runs=3,
+        tags=['almaty', 'weather', 'postgres'],
+) as dag:
 
-services:
-  superset:
-    env_file: superset/docker/.env-non-dev
-    image: *superset-image
-    container_name: superset_app
-    command: ["/app/docker/docker-bootstrap.sh", "app-gunicorn"]
-    user: "root"
-    restart: unless-stopped
-    ports:
-      - 5054:8088
-    depends_on: *superset-depends-on
-    volumes: *superset-volumes
+    start_task = EmptyOperator(task_id='start_pipeline')
+    skip_extraction = EmptyOperator(task_id='skip_extraction_data_exists')
 
-  db:
-    env_file: superset/docker/.env-non-dev
-    image: postgres:13
-    container_name: superset_db
-    restart: unless-stopped
-    volumes:
-      - db_home:/var/lib/postgresql/data
+    @task.branch(task_id='check_yesterday_data')
+    def check_data(**context):
+        """Проверяет в БД, есть ли уже данные за обрабатываемую дату (ds)"""
+        target_date = context['ds']
+        
+        pg_hook = PostgresHook(postgres_conn_id=POSTGRES_CONN_ID)
+        
+        # Сначала создаем таблицу, если это самый первый запуск
+        create_table_sql = """
+        CREATE TABLE IF NOT EXISTS almaty_climate (
+            date DATE PRIMARY KEY,
+            temperature NUMERIC(4, 2),
+            wind_speed NUMERIC(5, 2),
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+        pg_hook.run(create_table_sql)
+        
+        # Проверяем наличие строки за целевую дату
+        check_sql = "SELECT 1 FROM almaty_climate WHERE date = %s;"
+        result = pg_hook.get_first(check_sql, parameters=(target_date,))
 
-  superset-init:
-    image: *superset-image
-    container_name: superset_init
-    command: ["/app/docker/docker-init.sh"]
-    env_file: superset/docker/.env-non-dev
-    depends_on: *superset-depends-on
-    user: "root"
-    volumes: *superset-volumes
+        if result:
+            print(f" Данные за {target_date} уже есть в базе. Пропускаем шаг выгрузки.")
+            return 'skip_extraction_data_exists'  # Имя таски-заглушки
+        else:
+            print(f" Данных за {target_date} не найдено. Переходим к скачиванию.")
+            return 'extract_weather'  # Имя таски скачивания
 
-  superset-worker:
-    image: *superset-image
-    container_name: superset_worker
-    command: ["/app/docker/docker-bootstrap.sh", "worker"]
-    env_file: superset/docker/.env-non-dev
-    restart: unless-stopped
-    depends_on: *superset-depends-on
-    user: "root"
-    volumes: *superset-volumes
+    @task(task_id='extract_weather')
+    def extract_weather(**context):
+        """Извлекает данные погоды за целевую дату"""
+        target_date = context['ds']
+        base_url = "https://open-meteo.com"
 
-  superset-worker-beat:
-    image: *superset-image
-    container_name: superset_worker_beat
-    command: ["/app/docker/docker-bootstrap.sh", "beat"]
-    env_file: superset/docker/.env-non-dev
-    restart: unless-stopped
-    depends_on: *superset-depends-on
-    user: "root"
-    volumes: *superset-volumes
+        query_params = {
+            "latitude": 43.25,
+            "longitude": 76.95,
+            "start_date": target_date,
+            "end_date": target_date,
+            "daily": "temperature_2m_mean,wind_speed_10m_max",
+            "timezone": "Asia/Almaty"
+        }
 
-  warehouse-postgres:
-    image: postgres:14
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: postgres
-    ports:
-      - 5052:5432
-    volumes:
-      - postgres-warehouse-volume:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD", "pg_isready", "-U", "postgres"]
-      interval: 5s
-      retries: 5
-    restart: unless-stopped
+        response = requests.get(base_url, params=query_params)
+        response.raise_for_status()
+        data = response.json()
 
-  client-postgres:
-    image: postgres:13
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: postgres
-    ports:
-      - "5051:5432"
-    volumes:
-      - ./client-postgres-init:/docker-entrypoint-initdb.d
+        try:
+            temp = data['daily']['temperature_2m_mean'][0]
+            wind = data['daily']['wind_speed_10m_max'][0]
+        except (KeyError, IndexError, TypeError):
+            temp, wind = None, None
 
-  pgadmin:
-    container_name: pgadmin4
-    image: dpage/pgadmin4
-    restart: unless-stopped
-    environment:
-      PGADMIN_DEFAULT_EMAIL: admin@admin.com
-      PGADMIN_DEFAULT_PASSWORD: admin
-    ports:
-      - "5050:80"
+        return {'temp': temp, 'wind': wind}
 
-  airflow-postgres:
-    image: postgres:13
-    environment:
-      POSTGRES_USER: airflow
-      POSTGRES_PASSWORD: airflow
-      POSTGRES_DB: airflow
-    volumes:
-      - airflow-db-volume:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD", "pg_isready", "-U", "airflow"]
-      interval: 5s
-      retries: 5
-    restart: unless-stopped
+    @task(task_id='transform_and_load_to_postgres')
+    def transform_and_load(weather_results, **context):
+        """Сохраняет новые данные в PostgreSQL"""
+        target_date = context['ds']
+        temp = weather_results['temp']
+        wind = weather_results['wind']
 
-  redis:
-    image: redis:latest
-    expose:
-      - 6379
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 30s
-      retries: 50
-    restart: unless-stopped
+        if temp is None and wind is None:
+            return
 
-  airflow-webserver:
-    <<: *airflow-common
-    command: webserver
-    ports:
-      - 5053:8080
-    healthcheck:
-      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
-      interval: 10s
-      timeout: 10s
-      retries: 5
-    restart: unless-stopped
-    depends_on:
-      <<: *airflow-common-depends-on
-      airflow-init:
-        condition: service_completed_successfully
+        pg_hook = PostgresHook(postgres_conn_id=POSTGRES_CONN_ID)
+        upsert_sql = """
+        INSERT INTO almaty_climate (date, temperature, wind_speed)
+        VALUES (%s, %s, %s)
+        ON CONFLICT (date) 
+        DO UPDATE SET 
+            temperature = EXCLUDED.temperature,
+            wind_speed = EXCLUDED.wind_speed,
+            updated_at = CURRENT_TIMESTAMP;
+        """
+        pg_hook.run(upsert_sql, parameters=(target_date, temp, wind))
+        print(f" Данные успешно записаны за {target_date}")
 
-  airflow-scheduler:
-    <<: *airflow-common
-    command: scheduler
-    healthcheck:
-      test: ["CMD-SHELL", 'airflow jobs check --job-type SchedulerJob --hostname "$${HOSTNAME}"']
-      interval: 10s
-      timeout: 10s
-      retries: 5
-    restart: unless-stopped
-    depends_on:
-      <<: *airflow-common-depends-on
-      airflow-init:
-        condition: service_completed_successfully
-
-  airflow-worker:
-    <<: *airflow-common
-    command: celery worker
-    healthcheck:
-      test:
-        - "CMD-SHELL"
-        - 'celery --app airflow.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}"'
-      interval: 10s
-      timeout: 10s
-      retries: 5
-    environment:
-      <<: *airflow-common-env
-      # Required to handle warm shutdown of the celery workers properly
-      # See https://airflow.apache.org/docs/docker-stack/entrypoint.html#signal-propagation
-      DUMB_INIT_SETSID: "0"
-    restart: unless-stopped
-    depends_on:
-      <<: *airflow-common-depends-on
-      airflow-init:
-        condition: service_completed_successfully
-    deploy:
-      mode: replicated
-      replicas: 2
-
-  airflow-triggerer:
-    <<: *airflow-common
-    command: triggerer
-    healthcheck:
-      test: ["CMD-SHELL", 'airflow jobs check --job-type TriggererJob --hostname "$${HOSTNAME}"']
-      interval: 10s
-      timeout: 10s
-      retries: 5
-    restart: unless-stopped
-    depends_on:
-      <<: *airflow-common-depends-on
-      airflow-init:
-        condition: service_completed_successfully
-
-  airflow-init:
-    <<: *airflow-common
-    # entrypoint: /bin/bash
-    # yamllint disable rule:line-length
-    command: db init
-    environment:
-      <<: *airflow-common-env
-      _AIRFLOW_DB_UPGRADE: 'true'
-      _AIRFLOW_WWW_USER_CREATE: 'true'
-      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-airflow}
-      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-airflow}
-    user: "0:0"
-    volumes:
-      - ./airflow:/sources
-
-  airflow-cli:
-    <<: *airflow-common
-    profiles:
-      - debug
-    environment:
-      <<: *airflow-common-env
-      CONNECTION_CHECK_MAX_COUNT: "0"
-    # Workaround for entrypoint issue. See: https://github.com/apache/airflow/issues/16252
-    command:
-      - bash
-      - -c
-      - airflow
-
-  flower:
-    <<: *airflow-common
-    command: celery flower
-    ports:
-      - 5555:5555
-    healthcheck:
-      test: ["CMD", "curl", "--fail", "http://localhost:5555/"]
-      interval: 10s
-      timeout: 10s
-      retries: 5
-    restart: unless-stopped
-    depends_on:
-      <<: *airflow-common-depends-on
-      airflow-init:
-        condition: service_completed_successfully
-
-volumes:
-  airflow-db-volume:
-  superset_home:
-  db_home:
-  postgres-warehouse-volume:
+    # Логика ветвления связей
+    weather_data = extract_weather()
+    
+    start_task >> check_data()
+    
+    # Если данных нет: check_data -> extract_weather -> transform_and_load
+    check_data() >> weather_data
+    transform_and_load(weather_data)
+    
+    # Если данные есть: check_data -> skip_extraction (конец ветки)
+    check_data() >> skip_extraction
