@@ -43,7 +43,7 @@ Python — data extraction and processing.
 REST APIs / JSON — external data access and data exchange.
 Apache Airflow — workflow orchestration.
 PostgreSQL — centralized data storage.
-dbt Core — planned data transformation and testing.
+dbt Core — configured for future transformations and testing.
 Docker Compose — local development environment configuration.
 Git — version control.
 
