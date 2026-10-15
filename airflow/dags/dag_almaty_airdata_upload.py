@@ -1,124 +1,84 @@
+import gzip
+import io
 from datetime import datetime, timedelta
+import pandas as pd
 import requests
 from airflow import DAG
 from airflow.decorators import task
 from airflow.operators.empty import EmptyOperator
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 
-# Имя подключения, которое мы создали в Airflow UI
+# Имя подключения из Airflow UI
 POSTGRES_CONN_ID = "postgres_almaty_eco"
+# Название таблицы, куда запишем исторические данные
+TARGET_TABLE = "almaty_pm25_history"
+# Прямая ссылка на скачивание файла из GitHub (Raw)
+RAW_DATA_URL = "https://raw.githubusercontent.com/qazybekb/AirDatakz-OpenData/8393dada8fc6d12493684aecfbde5cc6175f8998/almaty/pm25.csv.gz"
+
 
 default_args = {
     'owner': 'yvmikh',
     'depends_on_past': False,
     'email_on_failure': False,
-    'retries': 2,
+    'retries': 1,
     'retry_delay': timedelta(minutes=5),
 }
 
 with DAG(
-        'almaty_daily_postgres_etl',
+        'almaty_airdata_upload',
         default_args=default_args,
-        description='Ежедневный ETL погодных и эко-данных Алматы в PostgreSQL',
-        schedule_interval='5 0 * * *',  # Каждый день в 00:05
+        description='Выгрузка исторического архива PM2.5 из GitHub в PostgreSQL',
+        schedule_interval='@once',  # Запустить один раз вручную в интерфейсе
         start_date=datetime(2026, 1, 1),
         catchup=False,
-        tags=['almaty', 'weather', 'airdata', 'postgres'],
+        tags=['almaty', 'airdata', 'postgres', 'history'],
 ) as dag:
-    start_task = EmptyOperator(task_id='start_pipeline')
+    start_task = EmptyOperator(task_id='start')
 
-    @task(task_id='extract_weather')
-    def extract_weather(**context):
-        """Извлекает данные погоды за целевую дату"""
-        target_date = context['ds']  # Подставит дату в формате YYYY-MM-DD
 
-        # ИСПРАВЛЕНО: Указан точный эндпоинт к API, а не корень сайта
-        base_url = "https://api.open-meteo.com/v1/forecast"
-        # https://api.open - meteo.com / v1 / forecast?latitude = 52.52 & longitude = 13.41 & hourly = temperature_2m
-
-        # Передаем параметры словарем — библиотека requests сама соберет идеальный URL
-        query_params = {
-            "latitude": 43.25,
-            "longitude": 76.95,
-            "start_date": target_date,
-            "end_date": target_date,
-            "daily": "temperature_2m_mean,precipitation_sum",
-            "timezone": "Asia/Almaty"
-        }
-
-        # Отправляем запрос с параметрами
-        response = requests.get(base_url, params=query_params)
-
-        # Выводим в логи Airflow получившийся адрес для полной проверки
-        print(f"Отправка запроса по адресу: {response.url}")
-
-        if response.status_code != 200:
-            print(f"❌ Ошибка сервера Open-Meteo: {response.text}")
-        response.raise_for_status()
-
-        data = response.json()
-
-        # Возвращаем конкретные численные значения из массивов ответа
-        return {
-            'temp': data['daily']['temperature_2m_mean'][0],
-            'precip': data['daily']['precipitation_sum'][0]
-        }
-
-    @task(task_id='extract_airdata')
-    def extract_airdata(**context):
-        """Извлекает данные PM2.5 с AirData.kz за целевую дату"""
-        target_date = context['ds']
-
-        # Эмуляция сбора данных. Замените на логику вашего парсера BeautifulSoup/Селекторов
-        try:
-            pm25_value = 38.4
-        except Exception as e:
-            pm25_value = None
-
-        return {'pm25': pm25_value}
-
-    @task(task_id='transform_and_load_to_postgres')
-    def transform_and_load(weather_results, air_results, **context):
-        """Создает таблицу, обрабатывает данные и загружает в PostgreSQL через Hook"""
-        target_date = context['ds']
-        temp = weather_results['temp']
-        precip = weather_results['precip']
-        pm25 = air_results['pm25']
-
-        # Инициализируем PostgresHook
+    @task(task_id='download_and_load_airdata')
+    def download_and_load():
+        """Скачивает .csv.gz файл, распаковывает в памяти и льет в Postgres порциями"""
+        # 1. Инициализируем подключение к базе данных через SQLAlchemy Engine
         pg_hook = PostgresHook(postgres_conn_id=POSTGRES_CONN_ID)
+        engine = pg_hook.get_sqlalchemy_engine()
 
-        # 1. Создаем таблицу (если не существует)
-        create_table_sql = """
-        CREATE TABLE IF NOT EXISTS almaty_eco_climate (
-            date DATE PRIMARY KEY,
-            temperature NUMERIC(4, 2),
-            precipitation NUMERIC(5, 2),
-            pm25 NUMERIC(5, 2),
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        """
-        pg_hook.run(create_table_sql)
+        # 2. Скачиваем архив в память stream-методом (без сохранения на диск)
+        print(f" Начинаем скачивание архива: {RAW_DATA_URL}")
 
-        # 2. Идемпотентная запись (UPSERT в PostgreSQL через ON CONFLICT)
-        upsert_sql = """
-        INSERT INTO almaty_eco_climate (date, temperature, precipitation, pm25)
-        VALUES (%s, %s, %s, %s)
-        ON CONFLICT (date) 
-        DO UPDATE SET 
-            temperature = EXCLUDED.temperature,
-            precipitation = EXCLUDED.precipitation,
-            pm25 = EXCLUDED.pm25,
-            updated_at = CURRENT_TIMESTAMP;
-        """
+        # Используем 'with', чтобы гарантировать закрытие соединения после выкачки stream
+        with requests.get(RAW_DATA_URL, stream=True) as response:
+            response.raise_for_status()
 
-        # Выполняем запрос с параметрами для защиты от SQL-инъекций
-        pg_hook.run(upsert_sql, parameters=(target_date, temp, precip, pm25))
-        print(f" Данные успешно сохранены/обновлены в Postgres за {target_date}")
+            # 3. Распаковываем GZIP "на лету" из сырого потока response.raw и читаем через Pandas порциями
+            print(" Распаковка и автоматическое определение структуры CSV...")
+            with gzip.GzipFile(fileobj=response.raw) as decompressed_file:
+                # chunksize=50000 позволяет читать файл пачками, экономя оперативную память
+                chunk_iter = pd.read_csv(decompressed_file, sep=',', chunksize=50000)
 
-    # Определение зависимостей внутри контекста DAG
-    weather_data = extract_weather()
-    air_data = extract_airdata()
+                for i, chunk in enumerate(chunk_iter):
+                    print(f" Обработка пакета строк (chunk) #{i + 1}...")
 
-    start_task >> [weather_data, air_data]
-    transform_and_load(weather_data, air_data)
+                    # При обработке самого первого пакета создаем таблицу заново.
+                    # Для всех последующих пакетов — просто дописываем данные в конец (append).
+                    if i == 0:
+                        mode = 'replace'
+                        print(f" Создаем/пересоздаем таблицу '{TARGET_TABLE}' на основе структуры CSV...")
+                    else:
+                        mode = 'append'
+
+                    # Записываем порцию данных в PostgreSQL
+                    chunk.to_sql(
+                        name=TARGET_TABLE,
+                        con=engine,
+                        if_exists=mode,
+                        index=False
+                    )
+
+        print(f" Успех! Все данные из архива импортированы в таблицу '{TARGET_TABLE}'.")
+
+
+    end_task = EmptyOperator(task_id='end')
+
+    # Очередь выполнения задач
+    start_task >> download_and_load() >> end_task
