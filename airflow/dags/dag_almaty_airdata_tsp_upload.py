@@ -11,9 +11,9 @@ from airflow.providers.postgres.hooks.postgres import PostgresHook
 # Имя подключения из Airflow UI
 POSTGRES_CONN_ID = "postgres_almaty_eco"
 # Название таблицы, куда запишем исторические данные
-TARGET_TABLE = "almaty_pm25_history"
+TARGET_TABLE = "almaty_tsp_history"
 # Прямая ссылка на скачивание файла из GitHub (Raw)
-RAW_DATA_URL = "https://raw.githubusercontent.com/qazybekb/AirDatakz-OpenData/8393dada8fc6d12493684aecfbde5cc6175f8998/almaty/pm25.csv.gz"
+RAW_DATA_URL = "https://raw.githubusercontent.com/qazybekb/AirDatakz-OpenData/main/almaty/tsp.csv.gz"
 
 
 default_args = {
@@ -25,9 +25,9 @@ default_args = {
 }
 
 with DAG(
-        'almaty_airdata_upload',
+        'almaty_airdata_tsp_upload',
         default_args=default_args,
-        description='Выгрузка исторического архива PM2.5 из GitHub в PostgreSQL',
+        description='Выгрузка исторического архива tsp из GitHub в PostgreSQL',
         schedule_interval='@once',  # Запустить один раз вручную в интерфейсе
         start_date=datetime(2026, 1, 1),
         catchup=False,

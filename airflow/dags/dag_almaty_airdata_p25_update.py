@@ -10,13 +10,13 @@ from airflow.providers.postgres.hooks.postgres import PostgresHook
 
 POSTGRES_CONN_ID = "postgres_almaty_eco"
 TARGET_TABLE = "almaty_pm25_history"
-RAW_DATA_URL = "https://raw.githubusercontent.com/qazybekb/AirDatakz-OpenData/8393dada8fc6d12493684aecfbde5cc6175f8998/almaty/pm25.csv.gz"
+RAW_DATA_URL = "https://raw.githubusercontent.com/qazybekb/AirDatakz-OpenData/main/almaty/pm25.csv.gz"
 
 default_args = {
     'owner': 'yvmikh',
     'depends_on_past': False,
     'email_on_failure': False,
-    'retries': 1,
+    'retries': 2,
     'retry_delay': timedelta(minutes=5),
 }
 
