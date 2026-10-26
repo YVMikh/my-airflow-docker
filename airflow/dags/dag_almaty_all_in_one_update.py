@@ -16,9 +16,12 @@ METRICS_CONFIG = {
     "pm25": "almaty_pm25_history",
     "pm10": "almaty_pm10_history",
     "no2": "almaty_no2_history",
+    "no": "almaty_no_history",
     "so2": "almaty_so2_history",
     "co": "almaty_co_history",
-    "o3": "almaty_o3_history"
+    "o3": "almaty_o3_history",
+    "h2s": "almaty_h2s_history",
+    "tsp": "almaty_tsp_history"
 }
 
 default_args = {

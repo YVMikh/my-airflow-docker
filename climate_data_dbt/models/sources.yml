@@ -1,0 +1,15 @@
+version: 2
+
+sources:
+  - name: eco_raw_data
+    schema: public
+    tables:
+      - name: almaty_pm10_history
+      - name: almaty_pm25_history
+      - name: almaty_so2_history
+      - name: almaty_h2s_history
+      - name: almaty_no2_history
+      - name: almaty_no_history
+      - name: almaty_o3_history
+      - name: almaty_tsp_history
+      - name: almaty_co_history

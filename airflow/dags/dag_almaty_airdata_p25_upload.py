@@ -13,7 +13,7 @@ POSTGRES_CONN_ID = "postgres_almaty_eco"
 # Название таблицы, куда запишем исторические данные
 TARGET_TABLE = "almaty_pm25_history"
 # Прямая ссылка на скачивание файла из GitHub (Raw)
-RAW_DATA_URL = "https://raw.githubusercontent.com/qazybekb/AirDatakz-OpenData/8393dada8fc6d12493684aecfbde5cc6175f8998/almaty/pm25.csv.gz"
+RAW_DATA_URL = "https://raw.githubusercontent.com/qazybekb/AirDatakz-OpenData/almaty/pm25.csv.gz"
 
 
 default_args = {

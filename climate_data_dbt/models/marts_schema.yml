@@ -1,0 +1,11 @@
+version: 2
+
+models:
+  - name: fct_almaty_eco_history
+    description: "Финальная витрина экологических показателей Алматы для Superset"
+    columns:
+      - name: measured_at
+        description: "Первичный ключ: дата и время замера"
+        tests:
+          - unique   # КРИТИЧНО: Проверяем, что нет дубликатов по времени!
+          - not_null # Проверяем, что нет пустых дат

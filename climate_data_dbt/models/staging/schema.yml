@@ -1,0 +1,22 @@
+version: 2
+
+models:
+  - name: stg_almaty_pm10
+    description: "Очищенные исторические данные по PM10 в Алматы"
+    columns:
+      - name: measured_at
+        tests:
+          - not_null
+      - name: pm10_value
+        tests:
+          - not_null
+
+  - name: stg_almaty_pm25
+    description: "Очищенные исторические данные по PM2.5 в Алматы"
+    columns:
+      - name: measured_at
+        tests:
+          - not_null
+      - name: pm25_value
+        tests:
+          - not_null
