@@ -33,6 +33,8 @@ x-airflow-common:
     AIRFLOW__API__AUTH_BACKEND: 'airflow.api.auth.backend.basic_auth'
     AIRFLOW__CORE__ENABLE_XCOM_PICKLING: 'true'
     AIRFLOW__CORE__TEST_CONNECTION: 'Enabled'
+    AIRFLOW__SCHEDULER__ZOMBIE_TASK_THRESHOLD: 300
+    AIRFLOW__CORE__KILLED_TASK_CLEANUP_TIME: 60
     _PIP_ADDITIONAL_REQUIREMENTS: "openmeteo-requests requests-cache retry-requests"
   volumes:
     - ./airflow/dags:/opt/airflow/dags
