@@ -13,3 +13,4 @@ sources:
       - name: almaty_o3_history
       - name: almaty_tsp_history
       - name: almaty_co_history
+      - name: almaty_hourly_weather

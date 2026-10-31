@@ -32,5 +32,14 @@ clean-targets:         # directories to be removed by `dbt clean`
 models:
   climate_data_dbt:
     # Config indicated by + and applies to all files under models/example/
-    +materialized: view
+    staging:
+      +materialized: view
+      +schema: staging
 
+    intermediate:
+      +materialized: table # view или table / ephemeral (см. ниже)
+      +schema: intermediate
+
+    marts:
+      +materialized: table
+      +schema: marts
