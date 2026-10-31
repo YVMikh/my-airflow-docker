@@ -150,7 +150,6 @@ with DAG(
                 except:
                     pass
 
-
     # Динамическая сборка цепочки тасок
     previous_task = start_task
 
