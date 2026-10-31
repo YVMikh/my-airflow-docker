@@ -8,3 +8,4 @@ select
     cast(wind_direction_deg as numeric(6,2)) as wind_direction,
     cast(wind_speed_ms as numeric(6,2)) as wind_speed
 from source
+where weather_time is not null and temperature_c is not null and wind_speed_ms is not null
