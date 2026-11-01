@@ -1,72 +1,98 @@
 # Climate and Air Quality Data Pipeline — Almaty
 
 Project Overview
-This personal Data Engineering project focuses on collecting and consolidating weather and air quality data for Almaty, Kazakhstan, from publicly available sources.
-The goal is to build an automated ETL pipeline that retrieves data from external sources, stores it in a centralized PostgreSQL database, and monitors data completeness.
-The long-term objective is to develop an analytical data mart for exploring climate and air quality trends and visualizing the collected data.
-Project status: In development.
+This Data Engineering project focuses on collecting, consolidating, and transforming weather and air quality data for Almaty, Kazakhstan, from publicly available sources.
+The project implements an automated, multi-layer ELT pipeline that retrieves data from external sources, stores raw observations in a centralized PostgreSQL database, and transforms them into analytical datasets using dbt Core.
+The pipeline is orchestrated with Apache Airflow and runs in a Docker Compose environment.
+Project Status: Active Development — Core Ingestion and Transformation Pipeline Implemented.
 
 ## Objectives
 
 - Automate data collection from public weather and air quality sources.
-- Consolidate data from external sources in a centralized PostgreSQL database.
-- Organize daily data ingestion and updates.
-- Detect missing observations by comparing API responses with existing database records and checking expected dates or time intervals.
-- Develop configurable data quality checks.
-- Design an analytical data model and data mart for future analysis and visualization.
-
-## Pipeline description
-The project is being developed iteratively, with the following workflow:
-
-1. Data ingestion — retrieve weather and air quality data from external sources through REST APIs.
-2. Data processing — parse JSON responses and prepare the extracted data for storage.
-3. Data storage — store collected data in PostgreSQL.
-4. Daily updates — schedule recurring ingestion jobs.
-5. Completeness checks — compare API responses with existing database records and identify missing dates or time intervals.
-6. Data quality validation — develop configurable checks for data completeness, consistency, and validity.
-7. Analytical data mart (planned) — organize validated data for analytical queries and visualization.
-
-## Data Quality
-
-Data completeness and reliability are key goals of the project.
-Current development focuses on identifying missing observations through source-response comparisons and checks against existing database records.
-Planned improvements include:
- - Configurable data validation rules.
- - not_null tests for required fields.
- - unique tests for selected keys.
- - Additional checks for data consistency and valid value ranges.
-These tests have not yet been implemented.
+- Consolidate observations from multiple external sources in a centralized PostgreSQL database.
+- Implement scheduled data ingestion, incremental loading, and automated update workflows.
+- Deduplicate and aggregate multi-station observations into stable geographical clusters.
+- Optimize data processing and storage through layered transformations.
+- Design an analytical data model for future BI visualization using Apache Superset.
 
 ## Technology Stack
 
-Python — data extraction and processing.
-REST APIs / JSON — external data access and data exchange.
-Apache Airflow — workflow orchestration.
-PostgreSQL — centralized data storage.
-dbt Core — configured for future transformations and testing.
-Docker Compose — local development environment configuration.
+Python / Pandas — data extraction, chunked file processing, and data manipulation.
+Apache Airflow — workflow orchestration, task dependencies, and scheduled pipeline execution.
+PostgreSQL — centralized relational database for raw and transformed datasets.
+dbt Core — multi-layer data transformations, model management, and automated data testing.
+Docker Compose — containerized local development environment.
 Git — version control.
 
-## Planned Architecture
+## 🏗 Implemented Pipeline Architecture
 
-The target architecture will introduce structured data layers and an analytical data mart:
-  Staging — initial storage and preparation of source data.
-  Core — standardized and consolidated data.
-  Data Mart — analytical datasets for queries and visualization.
-These layers and the analytical data mart have not yet been implemented.
+The project has evolved from basic data collection into a multi-layer ELT architecture consisting of raw, staging, and intermediate layers.
 
-## Future Development
+1. Data Ingestion — Airflow Layer
 
-- Implement and validate the daily ingestion workflow.
-- Expand data completeness checks and introduce configurable quality tests.
-- Develop the Staging and Core data layers in PostgreSQL.
-- Integrate dbt Core for data transformations and automated testing.
-- Build an analytical data mart for combined weather and air quality analysis.
-- Add a visualization layer to explore trends in Almaty.
+Memory-Efficient Ingestion: Airflow downloads compressed .csv.gz files from GitHub in 16 KB chunks and temporarily stores them on disk, reducing memory consumption during ingestion.
+Incremental Loading: Airflow uses the maximum available measured_at timestamp from the dbt staging layer as a loading watermark to identify new records and reduce duplicate processing.
+Automated Orchestration: Airflow manages ingestion tasks, dependencies, and scheduled pipeline execution.
+Centralized Storage: Raw observations from external sources are loaded into PostgreSQL for subsequent transformations.
 
-## Project Status
+2. Staging Layer — dbt Core
 
-The project is under active development. The current focus is on data ingestion, centralized storage, daily updates, and missing-data detection.
-The Docker Compose configuration is prepared. The structured data layers, automated dbt tests, analytical data mart, and visualization layer remain planned development stages.
+Configured as database VIEWs in the dbt_dev_staging schema.
+Filters out invalid and incomplete records, including observations with NULL measurement values (WHERE value_ugm3 IS NOT NULL).
+Geographical Cluster Aggregation: Consolidates observations from multiple independent sensors located within the same geographical cluster.
+Hourly Peak Calculation: Timestamps are truncated to hourly intervals using date_trunc, and MAX(value_ugm3) is applied to preserve peak recorded concentrations for each pollutant and geographical cluster.
+Reduces data volume and prevents row multiplication during subsequent JOIN operations.
 
-That`s all
+3. Intermediate Layer — dbt Core
+
+Materialized as a physical database TABLE in the dbt_dev_intermediate schema.
+Dynamically processes 9 pollutant metrics (PM2.5, PM10, SO2, H2S, NO2, NO, O3, TSP, CO) using Jinja loops to generate CTEs and build a single wide, de-normalized analytical table.
+Performance Optimization: Identified and resolved a data fan-out issue during JOIN operations. By moving aggregation logic to the Staging layer, the intermediate dataset was reduced from an 8 GB JOIN result to a compact 24 MB analytical table — approximately a 340x reduction in data volume.
+This optimization significantly reduced the size of the transformed dataset and improved query performance in database clients.
+
+📊 Data Quality and Validation
+
+Data completeness and consistency are checked through dbt tests and Airflow task-level validation.
+Composite Key Validation: dbt tests verify that the combination of measured_at and cluster_id is unique and contains no NULL values.
+Staging Data Validation: Staging models filter out records with missing measurement values before further transformations.
+Graceful Initialization: Airflow handles the absence of the staging view during initial deployment by applying a configurable default ingestion watermark and logging the fallback event.
+Pipeline Error Handling: Python try-except blocks provide controlled exception handling during ingestion and database operations.
+
+🚀 How to Run the Project
+
+1. Start the Environment
+
+Run Docker Compose from the project root directory:
+docker-compose up -d
+Check the status of the containers:
+docker-compose ps
+
+2. Trigger the Ingestion DAG
+
+Open the Airflow Web UI and unpause the following DAG:
+almaty_airdata_all_in_one_update
+The DAG sequentially retrieves, processes, and loads new air quality observations into PostgreSQL.
+
+3. Run dbt Transformations
+Navigate to the dbt project directory and execute:
+
+# Clean previous dbt build artifacts
+dbt clean
+
+# Build staging views (data filtering and hourly aggregation)
+dbt run --select path:models/staging
+
+# Build the intermediate analytical table
+dbt run --select int_almaty_air_quality
+
+# Run data quality tests
+dbt test --select int_almaty_air_quality
+
+Note: Make sure the dbt profile is configured to connect to the PostgreSQL database used by the project.
+
+🔮 Future Development
+
+Weather Data Integration: Integrate the almaty_hourly_weather dataset into the intermediate analytical model to correlate air pollution levels with temperature, wind speed, and humidity.
+Data Mart Layer: Develop a dedicated marts layer with business-oriented analytical models, including rolling 24-hour averages and daily Air Quality Index (AQI) calculations.
+BI Visualization: Connect Apache Superset to the future data marts and develop interactive dashboards for exploring air quality and climate trends in Almaty.
+Data Quality Improvements: Expand dbt test coverage and improve incremental loading logic to handle late-arriving and updated source records.
