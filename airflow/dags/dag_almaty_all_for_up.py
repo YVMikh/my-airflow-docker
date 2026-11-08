@@ -39,6 +39,7 @@ default_args = {
 
 with DAG(
         'almaty_all_for_up',
+        max_active_runs=1,
         default_args=default_args,
         description='Последовательный сбор данных качества воздуха Алматы (OOM-safe)',
         schedule_interval='@daily',
@@ -108,7 +109,7 @@ with DAG(
         print(f" [{metric_name}] Последняя валидная запись для фильтрации новых данных: {last_db_time}")
 
         # 3. Потоковое скачивание архива данных
-        raw_data_url = f"https://githubusercontent.com{metric_name}.csv.gz"
+        raw_data_url = f"https://raw.githubusercontent.com/qazybekb/AirDatakz-OpenData/main/almaty/{metric_name}.csv.gz"
         print(f" [{metric_name}] Начинаем потоковое скачивание файла: {raw_data_url}")
 
         temp_file_path = None

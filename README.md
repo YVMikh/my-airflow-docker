@@ -1,6 +1,6 @@
 # Climate and Air Quality Data Pipeline — Almaty
 
-Project Overview
+##  Project Overview
 This Data Engineering project focuses on collecting, consolidating, and transforming weather and air quality data for Almaty, Kazakhstan, from publicly available sources.
 The project implements an automated, multi-layer ELT pipeline that retrieves data from external sources, stores raw observations in a centralized PostgreSQL database, and transforms them into analytical datasets using dbt Core.
 The pipeline is orchestrated with Apache Airflow and runs in a Docker Compose environment.

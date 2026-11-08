@@ -15,7 +15,6 @@ TARGET_TABLE = "almaty_so2_history"
 # Прямая ссылка на скачивание файла из GitHub (Raw)
 RAW_DATA_URL = "https://raw.githubusercontent.com/qazybekb/AirDatakz-OpenData/main/almaty/so2.csv.gz"
 
-
 default_args = {
     'owner': 'yvmikh',
     'depends_on_past': False,
@@ -25,9 +24,9 @@ default_args = {
 }
 
 with DAG(
-        'almaty_airdata_so2_upload',
+        'almaty_airdata_s02_upload',
         default_args=default_args,
-        description='Выгрузка исторического архива so2 из GitHub в PostgreSQL',
+        description='Выгрузка исторического архива s02 из GitHub в PostgreSQL',
         schedule_interval='@once',  # Запустить один раз вручную в интерфейсе
         start_date=datetime(2026, 1, 1),
         catchup=False,
@@ -59,21 +58,22 @@ with DAG(
                 for i, chunk in enumerate(chunk_iter):
                     print(f" Обработка пакета строк (chunk) #{i + 1}...")
 
-                    # При обработке самого первого пакета создаем таблицу заново.
-                    # Для всех последующих пакетов — просто дописываем данные в конец (append).
+                    # При обработке самого первого пакета очищаем таблицу,
                     if i == 0:
-                        mode = 'replace'
-                        print(f" Создаем/пересоздаем таблицу '{TARGET_TABLE}' на основе структуры CSV...")
-                    else:
-                        mode = 'append'
+                        print(f" Очищаем старые данные из таблицы '{TARGET_TABLE}'...")
+                        # Открываем явное соединение через engine и оборачиваем запрос в text()
+                        from sqlalchemy import text
+                        with engine.connect() as conn:
+                            conn.execute(text(f"TRUNCATE TABLE {TARGET_TABLE};"))
 
                     # Записываем порцию данных в PostgreSQL
                     chunk.to_sql(
                         name=TARGET_TABLE,
                         con=engine,
-                        if_exists=mode,
+                        if_exists='append',
                         index=False
                     )
+
 
         print(f" Успех! Все данные из архива импортированы в таблицу '{TARGET_TABLE}'.")
 
