@@ -11,15 +11,19 @@
 } %}
 
 with
--- 1. Забираем уже агрегированные (максимальные) данные из staging
+-- 1. Забираем агрегированные данные (максимум, минимум, среднее, медиану) из staging
 {% for gas, model_name in gas_mapping.items() %}
 {{ gas }}__clean as (
     select
         measured_at,
         cluster_id,
         cluster_name,
-        {% set source_col = 'no_value' if gas == 'pm_no' else gas ~ '_value' %}
-        {{ source_col }} as {{ gas }}
+        -- Для pm_no базовый префикс 'no', для остальных совпадает с названием газа
+        {% set base_prefix = 'no' if gas == 'pm_no' else gas %}
+        {{ base_prefix }}_max as {{ gas }}_max,
+        {{ base_prefix }}_min as {{ gas }}_min,
+        {{ base_prefix }}_avg as {{ gas }}_avg,
+        {{ base_prefix }}_median as {{ gas }}_median
     from {{ ref(model_name) }}
 ),
 {% endfor %}
@@ -38,13 +42,16 @@ all_keys as (
     ) as combined_keys
 )
 
--- 3. Быстрая финальная склейка 1 к 1
+-- 3. Финальная склейка всех метрик по каждому газу
 select
     k.measured_at,
     k.cluster_id,
     k.cluster_name,
     {% for gas in gas_mapping.keys() %}
-    {{ gas }}__clean.{{ gas }}{% if not loop.last %},{% endif %}
+    {{ gas }}__clean.{{ gas }}_max,
+    {{ gas }}__clean.{{ gas }}_min,
+    {{ gas }}__clean.{{ gas }}_avg,
+    {{ gas }}__clean.{{ gas }}_median{% if not loop.last %},{% endif %}
     {% endfor %}
 from all_keys k
 {% for gas in gas_mapping.keys() %}

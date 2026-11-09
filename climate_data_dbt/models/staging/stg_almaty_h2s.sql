@@ -5,7 +5,10 @@ select
     date_trunc('hour', cast(datetime_utc as timestamp)) as measured_at,
     cast(cluster_id as varchar) as cluster_id,
     cast(max(cluster_name) as varchar) as cluster_name,
-    cast(max(value_ugm3) as numeric(10,4)) as h2s_value
+    cast(max(value_ugm3) as numeric(10,4)) as h2s_max,
+    cast(min(value_ugm3) as numeric(10,4)) as h2s_min,
+    cast(avg(value_ugm3) as numeric(10,4)) as h2s_avg,
+    cast(percentile_cont(0.5) within group (order by value_ugm3) as numeric(10,4)) as h2s_median
 from source
 where datetime_utc is not null
   and value_ugm3 is not null
