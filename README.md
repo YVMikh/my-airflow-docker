@@ -1,6 +1,7 @@
 # Climate and Air Quality Data Pipeline — Almaty
 
 ##  Project Overview
+
 This Data Engineering project focuses on collecting, consolidating, and transforming weather and air quality data for Almaty, Kazakhstan, from publicly available sources.
 The project implements an automated, multi-layer ELT pipeline that retrieves data from external sources, stores raw observations in a centralized PostgreSQL database, and transforms them into analytical datasets using dbt Core.
 The pipeline is orchestrated with Apache Airflow and runs in a Docker Compose environment.
@@ -11,7 +12,7 @@ Project Status: Active Development — Core Ingestion and Transformation Pipelin
 - Automate data collection from public weather and air quality sources.
 - Consolidate observations from multiple external sources in a centralized PostgreSQL database.
 - Implement scheduled data ingestion, incremental loading, and automated update workflows.
-- Deduplicate and aggregate multi-station observations into stable geographical clusters.
+- Deduplicate and aggregate multi-station observations into stable geographical clusters, preserving the distribution of values within each cluster (maximum, minimum, mean, and median).
 - Optimize data processing and storage through layered transformations.
 - Design an analytical data model for future BI visualization using Apache Superset.
 
@@ -40,14 +41,19 @@ Centralized Storage: Raw observations from external sources are loaded into Post
 Configured as database VIEWs in the dbt_dev_staging schema.
 Filters out invalid and incomplete records, including observations with NULL measurement values (WHERE value_ugm3 IS NOT NULL).
 Geographical Cluster Aggregation: Consolidates observations from multiple independent sensors located within the same geographical cluster.
-Hourly Peak Calculation: Timestamps are truncated to hourly intervals using date_trunc, and MAX(value_ugm3) is applied to preserve peak recorded concentrations for each pollutant and geographical cluster.
+Hourly Statistical Aggregation: Timestamps are truncated to hourly intervals using date_trunc, and for each pollutant and geographical cluster the following statistics of value_ugm3 are calculated at the moment of measurement:
+- MAX — peak recorded concentration;
+- MIN — lowest recorded concentration;
+- AVG — mean concentration across the cluster's sensors;
+- median — calculated with percentile_cont(0.5), which is robust to outliers from individual sensors.
+Preserving the full set of statistics (instead of a single maximum value) retains information about the spread of readings within a cluster and allows the analytical layer to distinguish local spikes from cluster-wide pollution.
 Reduces data volume and prevents row multiplication during subsequent JOIN operations.
 
 3. Intermediate Layer — dbt Core
 
 Materialized as a physical database TABLE in the dbt_dev_intermediate schema.
-Dynamically processes 9 pollutant metrics (PM2.5, PM10, SO2, H2S, NO2, NO, O3, TSP, CO) using Jinja loops to generate CTEs and build a single wide, de-normalized analytical table.
-Performance Optimization: Identified and resolved a data fan-out issue during JOIN operations. By moving aggregation logic to the Staging layer, the intermediate dataset was reduced from an 8 GB JOIN result to a compact 24 MB analytical table — approximately a 340x reduction in data volume.
+Dynamically processes 9 pollutant metrics (PM2.5, PM10, SO2, H2S, NO2, NO, O3, TSP, CO) using Jinja loops to generate CTEs and build a single wide, de-normalized analytical table. For each pollutant, the table contains four statistics per cluster and hour: maximum, minimum, mean, and median.
+Performance Optimization: Identified and resolved a data fan-out issue during JOIN operations. By moving aggregation logic to the Staging layer, the intermediate dataset was reduced from an 8 GB JOIN result to a compact analytical table — approximately a 340x reduction in data volume (measured before adding the additional statistics).
 This optimization significantly reduced the size of the transformed dataset and improved query performance in database clients.
 
 📊 Data Quality and Validation
