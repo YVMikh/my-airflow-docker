@@ -19,6 +19,7 @@ import io
 import os
 import tempfile
 from datetime import datetime, timedelta, timezone
+from statistics import median
 
 import pandas as pd
 import requests
@@ -83,6 +84,14 @@ LOOKBACK_DAYS = 3        # повторная проверка последни�
 CHUNK_ROWS = 100_000     # размер порции чтения файла (защита от OOM)
 MAX_REJECT_SHARE = 0.01  # доля строк с непрочитанным временем/без станции, выше которой загрузка падает
 
+# Проверки сырого слоя (результаты пишутся в monitoring.dq_run_results, DAG они не останавливают)
+FRESHNESS_DEFAULT_HOURS = 72         # допустимое отставание последней записи таблицы от текущего момента
+FRESHNESS_OVERRIDES = {"h2s": None}  # None = закрытый архив, свежесть не проверяется
+VOLUME_HISTORY_RUNS = 14             # сколько прошлых инкрементальных запусков берём как базу сравнения
+VOLUME_MIN_HISTORY = 5               # меньше запусков - базы для сравнения ещё нет (проверка skip)
+VOLUME_SPIKE_FACTOR = 3.0            # вставка больше медианы в столько раз считается всплеском
+VOLUME_MIN_THRESHOLD = 50            # нижняя граница порога, чтобы у малых источников не было ложных тревог
+
 DDL_MONITORING = [
     "CREATE SCHEMA IF NOT EXISTS monitoring",
     """CREATE TABLE IF NOT EXISTS monitoring.etl_watermarks (
@@ -101,7 +110,12 @@ DDL_MONITORING = [
            check_id BIGSERIAL PRIMARY KEY,
            run_id TEXT, source_name TEXT, layer TEXT, check_name TEXT,
            check_timestamp TIMESTAMPTZ DEFAULT now(),
-           total_records BIGINT, failed_records BIGINT, status TEXT)""",
+           total_records BIGINT, failed_records BIGINT, status TEXT,
+           observed_value DOUBLE PRECISION, threshold_value DOUBLE PRECISION)""",
+    # для уже созданной таблицы: наблюдаемое значение и порог (свежесть, объём вставки)
+    "ALTER TABLE monitoring.dq_run_results "
+    "ADD COLUMN IF NOT EXISTS observed_value DOUBLE PRECISION, "
+    "ADD COLUMN IF NOT EXISTS threshold_value DOUBLE PRECISION",
 ]
 
 default_args = {
@@ -400,11 +414,21 @@ def _load_source(metric: str, table: str, run_id: str, mode: str) -> dict:
 
 
 def _check_raw(metric: str, table: str, run_id: str) -> None:
-    """Проверки сырого слоя по строкам, вставленным или изменённым в этом запуске.
-    Результаты только фиксируются (warn), решение о браке принимает STG."""
+    """Проверки сырого слоя. Результаты только фиксируются (pass / warn / skip),
+    решение о браке принимает STG, а запуск DAG проверки не останавливают.
+
+    1) Построчные проверки по строкам, вставленным или изменённым в этом запуске.
+    2) freshness_hours: отставание последней записи всей таблицы от текущего момента (UTC).
+    3) inserted_rows_volume: число вставленных строк этого запуска против медианы прошлых
+       инкрементальных запусков (всплеск = сдвиг времени в источнике или повторная выдача истории).
+    Для проверок 2 и 3 observed_value хранит наблюдаемое значение, threshold_value - порог.
+    """
     conn = _connect()
     try:
         with conn, conn.cursor() as cur:
+            tbl = sql.Identifier(RAW_SCHEMA, table)
+
+            # 1. Построчные проверки
             cur.execute(sql.SQL(
                 """SELECT COUNT(*),
                           COUNT(*) FILTER (WHERE value_ugm3 IS NULL),
@@ -412,16 +436,54 @@ def _check_raw(metric: str, table: str, run_id: str) -> None:
                           COUNT(*) FILTER (WHERE datetime_utc > (now() AT TIME ZONE 'UTC')),
                           COUNT(*) FILTER (WHERE cluster_id IS NULL)
                    FROM {} WHERE load_run_id = %s"""
-            ).format(sql.Identifier(RAW_SCHEMA, table)), (run_id,))
+            ).format(tbl), (run_id,))
             total, null_value, negative, future, no_cluster = cur.fetchone()
-            checks = [("missing_value", null_value), ("negative_value", negative),
-                      ("future_time", future), ("missing_cluster", no_cluster)]
+            # кортеж: (проверка, всего, нарушений, статус, наблюдаемое значение, порог)
+            rows = [(name, total, failed, "pass" if failed == 0 else "warn", None, None)
+                    for name, failed in [("missing_value", null_value), ("negative_value", negative),
+                                         ("future_time", future), ("missing_cluster", no_cluster)]]
+
+            # 2. Свежесть (считается и когда источник не менялся: именно так ловится "застывший" источник)
+            cur.execute(sql.SQL(
+                "SELECT EXTRACT(EPOCH FROM ((now() AT TIME ZONE 'UTC') - MAX(datetime_utc))) / 3600 FROM {}"
+            ).format(tbl))
+            lag = cur.fetchone()[0]
+            lag = float(lag) if lag is not None else None
+            max_lag = FRESHNESS_OVERRIDES.get(metric, FRESHNESS_DEFAULT_HOURS)
+            if max_lag is None:
+                status = "skip"
+            elif lag is None or lag > max_lag:
+                status = "warn"  # включая пустую таблицу
+            else:
+                status = "pass"
+            rows.append(("freshness_hours", 1, int(status == "warn"), status, lag, max_lag))
+
+            # 3. Объём вставки: только для успешного инкрементального запуска
+            cur.execute("SELECT status, mode, rows_inserted FROM monitoring.etl_load_log "
+                        "WHERE run_id = %s AND source_name = %s ORDER BY log_id DESC LIMIT 1",
+                        (run_id, metric))
+            last = cur.fetchone()
+            if last and last[0] == "success" and last[1] == "incremental":
+                inserted = last[2]
+                cur.execute("SELECT rows_inserted FROM monitoring.etl_load_log "
+                            "WHERE source_name = %s AND mode = 'incremental' AND status = 'success' "
+                            "AND run_id <> %s ORDER BY log_id DESC LIMIT %s",
+                            (metric, run_id, VOLUME_HISTORY_RUNS))
+                history = [r[0] for r in cur.fetchall()]
+                if len(history) < VOLUME_MIN_HISTORY:
+                    rows.append(("inserted_rows_volume", 1, 0, "skip", inserted, None))
+                else:
+                    limit = max(median(history) * VOLUME_SPIKE_FACTOR, VOLUME_MIN_THRESHOLD)
+                    warn = inserted > limit
+                    rows.append(("inserted_rows_volume", 1, int(warn),
+                                 "warn" if warn else "pass", inserted, limit))
+
             cur.executemany(
                 "INSERT INTO monitoring.dq_run_results "
-                "(run_id, source_name, layer, check_name, total_records, failed_records, status) "
-                "VALUES (%s, %s, 'raw', %s, %s, %s, %s)",
-                [(run_id, metric, name, total, failed, "pass" if failed == 0 else "warn")
-                 for name, failed in checks],
+                "(run_id, source_name, layer, check_name, total_records, failed_records, status, "
+                "observed_value, threshold_value) "
+                "VALUES (%s, %s, 'raw', %s, %s, %s, %s, %s, %s)",
+                [(run_id, metric, *r) for r in rows],
             )
     finally:
         conn.close()
