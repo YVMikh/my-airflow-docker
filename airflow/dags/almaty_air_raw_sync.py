@@ -11,7 +11,7 @@ Raw-загрузка загрязнения воздуха Алматы: пар�
   incremental - читаем только записи новее (watermark - LOOKBACK_DAYS);
   full        - читаем весь архив. Запись идемпотентна (upsert), поэтому дублей нет.
 
-Требования: Airflow >= 2.4, провайдер postgres (psycopg2), pandas, requests.
+Требования: Airflow >= 2.4 (ориентир - 2.10.5), провайдер postgres (psycopg2), pandas, requests.
 """
 from __future__ import annotations
 
@@ -31,7 +31,6 @@ from airflow.operators.python import get_current_context
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
-from pandas import to_datetime
 from psycopg2 import sql
 
 # ----------------------------------------------------------------------------
@@ -74,9 +73,15 @@ COLUMN_TYPES = {
 DATA_COLUMNS = list(COLUMN_TYPES)
 NUMERIC_COLUMNS = ["lat", "lon", "value_ugm3"]
 NON_KEY_COLUMNS = [c for c in DATA_COLUMNS if c not in KEY_COLUMNS]
+PG_TYPE_NAMES = {
+    "TIMESTAMP WITHOUT TIME ZONE": "timestamp without time zone",
+    "VARCHAR": "character varying",
+    "NUMERIC": "numeric",
+}
 
 LOOKBACK_DAYS = 3        # повторная проверка последних дней (опоздавшие/исправленные данные)
 CHUNK_ROWS = 100_000     # размер порции чтения файла (защита от OOM)
+MAX_REJECT_SHARE = 0.01  # доля строк с непрочитанным временем/без станции, выше которой загрузка падает
 
 DDL_MONITORING = [
     "CREATE SCHEMA IF NOT EXISTS monitoring",
@@ -144,6 +149,15 @@ def _init_schema(dedupe: bool) -> None:
                     "ADD COLUMN IF NOT EXISTS loaded_at TIMESTAMPTZ DEFAULT now()"
                 ).format(tbl))
 
+                # Расхождение типов с ожидаемыми (только отчёт, ничего не меняется)
+                cur.execute("SELECT column_name, data_type FROM information_schema.columns "
+                            "WHERE table_schema = %s AND table_name = %s", (RAW_SCHEMA, table))
+                actual_types = dict(cur.fetchall())
+                for col, expected in COLUMN_TYPES.items():
+                    if actual_types.get(col) != PG_TYPE_NAMES[expected]:
+                        print(f"[{table}] ВНИМАНИЕ: {col} имеет тип {actual_types.get(col)}, "
+                              f"ожидался {PG_TYPE_NAMES[expected]}")
+
                 # Пустые значения в ключе: уникальный индекс их не ловит
                 null_cond = _join((sql.SQL("{} IS NULL").format(sql.Identifier(c))
                                    for c in KEY_COLUMNS), " OR ")
@@ -195,7 +209,7 @@ with DAG(
     "almaty_air_raw_init",
     default_args=default_args,
     description="Одноразовая инициализация raw и monitoring (запускать вручную)",
-    schedule_interval=None,
+    schedule=None,
     start_date=datetime(2026, 1, 1),
     catchup=False,
     params={"dedupe": Param(False, type="boolean")},
@@ -218,7 +232,7 @@ LOG_SQL = """
          rows_rejected_key, rows_in_window, rows_dup_in_source, rows_inserted,
          rows_updated, rows_unchanged, window_start, error_message)
     VALUES
-        (%(run_id)s, %(source)s, %(mode)s, %(started)s, now(), %(status)s, %(rows_read)s,
+        (%(run_id)s, %(source)s, %(mode)s, %(started)s, clock_timestamp(), %(status)s, %(rows_read)s,
          %(rows_rejected_key)s, %(rows_in_window)s, %(rows_dup_in_source)s, %(rows_inserted)s,
          %(rows_updated)s, %(rows_unchanged)s, %(window_start)s, %(error)s)
 """
@@ -266,6 +280,7 @@ def _load_source(metric: str, table: str, run_id: str, mode: str) -> dict:
                         "FROM monitoring.etl_watermarks WHERE source_name = %s", (metric,))
             row = cur.fetchone()
         watermark, etag = row if row else (None, None)
+        conn.commit()  # не держим транзакцию открытой на время скачивания файла
 
         if mode == "incremental" and watermark is not None:
             window_start = watermark - timedelta(days=LOOKBACK_DAYS)
@@ -288,20 +303,25 @@ def _load_source(metric: str, table: str, run_id: str, mode: str) -> dict:
         # 2. Чтение порциями -> временная таблица -> один upsert в одной транзакции
         with conn, conn.cursor() as cur:
             cur.execute("SET LOCAL statement_timeout = 600000")
-            stage_cols = _join(sql.SQL("{} {}").format(sql.Identifier(c), sql.SQL(t))
-                               for c, t in COLUMN_TYPES.items())
-            cur.execute(sql.SQL("CREATE TEMP TABLE _stage (_n BIGSERIAL, {}) ON COMMIT DROP")
-                        .format(stage_cols))
+            # Типы стейджа берутся из реальной таблицы: если в базе тип отличается от
+            # COLUMN_TYPES (например, таблицу раньше создал pandas), вставка не упадёт.
+            cur.execute(sql.SQL("CREATE TEMP TABLE _stage (LIKE {} INCLUDING DEFAULTS) ON COMMIT DROP")
+                        .format(sql.Identifier(RAW_SCHEMA, table)))
+            cur.execute("ALTER TABLE _stage ADD COLUMN _n BIGSERIAL")
             copy_sql = sql.SQL("COPY _stage ({}) FROM STDIN WITH (FORMAT csv)") \
                 .format(_idents(DATA_COLUMNS)).as_string(conn)
 
             max_dt = None
+            now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
             for part in pd.read_csv(tmp_path, compression="gzip", dtype=str, chunksize=CHUNK_ROWS):
                 missing = [c for c in KEY_COLUMNS if c not in part.columns]
                 if missing:
                     raise KeyError(f"В архиве {metric} нет обязательных колонок: {missing}")
                 part = part.reindex(columns=DATA_COLUMNS)
-                part["datetime_utc"] = (pd.to_datetime(part["datetime_utc"], errors="coerce", utc=True)
+                # Формат ISO 8601 (например 2020-12-31 18:00:00+00:00) разбирается строго и приводится к UTC;
+                # значение без смещения трактуется как UTC
+                part["datetime_utc"] = (pd.to_datetime(part["datetime_utc"], errors="coerce",
+                                                       utc=True, format="ISO8601")
                                         .dt.tz_localize(None))
                 stats["rows_read"] += len(part)
 
@@ -312,8 +332,12 @@ def _load_source(metric: str, table: str, run_id: str, mode: str) -> dict:
                 if part.empty:
                     continue
 
-                part_max = part["datetime_utc"].max()
-                max_dt = part_max if max_dt is None else max(max_dt, part_max)
+                # Будущие метки в водяную метку не попадают: одна такая строка сдвинула бы окно
+                # вперёд и остановила приём реальных данных
+                plausible = part.loc[part["datetime_utc"] <= now_utc + timedelta(hours=1), "datetime_utc"]
+                if not plausible.empty:
+                    part_max = plausible.max()
+                    max_dt = part_max if max_dt is None else max(max_dt, part_max)
 
                 if window_start is not None:
                     part = part[part["datetime_utc"] >= window_start]
@@ -327,6 +351,12 @@ def _load_source(metric: str, table: str, run_id: str, mode: str) -> dict:
                 part.to_csv(buf, index=False, header=False)
                 buf.seek(0)
                 cur.copy_expert(copy_sql, buf)
+
+            # Смена формата времени в источнике не должна проходить молча
+            if stats["rows_read"] and stats["rows_rejected_key"] / stats["rows_read"] > MAX_REJECT_SHARE:
+                raise AirflowFailException(
+                    f"{metric}: отклонено {stats['rows_rejected_key']} из {stats['rows_read']} строк "
+                    "(время не разобрано или нет станции). Проверьте формат источника.")
 
             if stats["rows_in_window"]:
                 cur.execute(sql.SQL("SELECT COUNT(*) FROM (SELECT DISTINCT {} FROM _stage) d")
@@ -401,7 +431,7 @@ with DAG(
     "almaty_air_raw_sync",
     default_args=default_args,
     description="Параметризованное обновление raw-таблиц загрязнения воздуха Алматы",
-    schedule_interval="@daily",
+    schedule="@daily",
     start_date=datetime(2026, 1, 1),
     catchup=False,
     max_active_runs=1,
