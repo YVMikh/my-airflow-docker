@@ -23,6 +23,7 @@ from statistics import median
 
 import pandas as pd
 import requests
+import pendulum
 from airflow import DAG
 from airflow.decorators import task
 from airflow.exceptions import AirflowFailException, AirflowSkipException
@@ -84,6 +85,12 @@ LOOKBACK_DAYS = 3        # повторная проверка последни�
 CHUNK_ROWS = 100_000     # размер порции чтения файла (защита от OOM)
 MAX_REJECT_SHARE = 0.01  # доля строк с непрочитанным временем/без станции, выше которой загрузка падает
 
+# Расписание: источник обновляется примерно в 15:00 по Алматы, запускаем через час после этого.
+# Если Docker в это время выключен, при старте Airflow выполнит один пропущенный запуск (catchup=False),
+# а загрузка по водяной метке заберёт всё накопленное, так что данные за пропущенные дни не теряются.
+SCHEDULE = "0 16 * * *"
+SCHEDULE_START = pendulum.datetime(2026, 1, 1, tz="Asia/Almaty")
+
 # Проверки сырого слоя (результаты пишутся в monitoring.dq_run_results, DAG они не останавливают)
 FRESHNESS_DEFAULT_HOURS = 72         # допустимое отставание последней записи таблицы от текущего момента
 FRESHNESS_OVERRIDES = {"h2s": None}  # None = закрытый архив, свежесть не проверяется
@@ -91,6 +98,9 @@ VOLUME_HISTORY_RUNS = 14             # сколько прошлых инкре�
 VOLUME_MIN_HISTORY = 5               # меньше запусков - базы для сравнения ещё нет (проверка skip)
 VOLUME_SPIKE_FACTOR = 3.0            # вставка больше медианы в столько раз считается всплеском
 VOLUME_MIN_THRESHOLD = 50            # нижняя граница порога, чтобы у малых источников не было ложных тревог
+RELATIVE_LAG_MAX_HOURS = 12          # допустимое отставание источника от медианы остальных, ч
+RELATIVE_LAG_MIN_PEERS = 3           # меньше живых соседей - сравнивать не с кем (проверка skip)
+CLOSED_ARCHIVES = {m for m, v in FRESHNESS_OVERRIDES.items() if v is None}  # в сравнении не участвуют
 
 DDL_MONITORING = [
     "CREATE SCHEMA IF NOT EXISTS monitoring",
@@ -460,7 +470,7 @@ def _check_raw(metric: str, table: str, run_id: str) -> None:
 
             # 3. Объём вставки: только для успешного инкрементального запуска
             cur.execute("SELECT status, mode, rows_inserted FROM monitoring.etl_load_log "
-                        "WHERE run_id = %s AND source_name = %s ORDER BY log_id DESC LIMIT 1",
+                        "WHERE run_id = %s AND source_name = %s AND status = 'success' ORDER BY log_id DESC LIMIT 1",
                         (run_id, metric))
             last = cur.fetchone()
             if last and last[0] == "success" and last[1] == "incremental":
@@ -489,12 +499,64 @@ def _check_raw(metric: str, table: str, run_id: str) -> None:
         conn.close()
 
 
+def _epoch(ts: datetime) -> float:
+    return ts.replace(tzinfo=timezone.utc).timestamp()
+
+
+def _lag_vs_peers(own: datetime, peers: list) -> float:
+    """Отставание (в часах) последнего наблюдения источника от медианы соседей.
+    Отрицательное значение означает, что источник впереди соседей."""
+    reference = median(_epoch(t) for t in peers)
+    return (reference - _epoch(own)) / 3600
+
+
+def _check_relative_lag(run_id: str) -> None:
+    """Сравнивает источники друг с другом по водяным меткам (etl_watermarks).
+    Статусы: pass, warn (отставание выше порога), alert (warn повторился подряд), skip.
+    Не зависит от времени запуска, выходных и выключенного компьютера: сравнение идёт между источниками."""
+    conn = _connect()
+    try:
+        with conn, conn.cursor() as cur:
+            cur.execute("SELECT source_name, last_successful_loaded_at FROM monitoring.etl_watermarks")
+            marks = {name: ts for name, ts in cur.fetchall() if ts is not None}
+            rows = []
+            for metric in METRICS_CONFIG:
+                own = marks.get(metric)
+                peers = [ts for name, ts in marks.items()
+                         if name != metric and name in METRICS_CONFIG and name not in CLOSED_ARCHIVES]
+                if metric in CLOSED_ARCHIVES or own is None or len(peers) < RELATIVE_LAG_MIN_PEERS:
+                    rows.append((metric, 1, 0, "skip", None, None))
+                    continue
+                lag = _lag_vs_peers(own, peers)
+                if lag <= RELATIVE_LAG_MAX_HOURS:
+                    status = "pass"
+                else:
+                    # Повышение при повторе: предыдущая содержательная проверка тоже была warn или alert
+                    cur.execute("SELECT status FROM monitoring.dq_run_results "
+                                "WHERE source_name = %s AND check_name = 'relative_lag_hours' "
+                                "AND run_id <> %s AND status <> 'skip' ORDER BY check_id DESC LIMIT 1",
+                                (metric, run_id))
+                    prev = cur.fetchone()
+                    status = "alert" if prev and prev[0] in ("warn", "alert") else "warn"
+                rows.append((metric, 1, int(status != "pass"), status, lag, RELATIVE_LAG_MAX_HOURS))
+
+            cur.executemany(
+                "INSERT INTO monitoring.dq_run_results "
+                "(run_id, source_name, layer, check_name, total_records, failed_records, status, "
+                "observed_value, threshold_value) "
+                "VALUES (%s, %s, 'raw', 'relative_lag_hours', %s, %s, %s, %s, %s)",
+                [(run_id, m, *rest) for m, *rest in rows],
+            )
+    finally:
+        conn.close()
+
+
 with DAG(
     "almaty_air_raw_sync",
     default_args=default_args,
     description="Параметризованное обновление raw-таблиц загрязнения воздуха Алматы",
-    schedule="@daily",
-    start_date=datetime(2026, 1, 1),
+    schedule=SCHEDULE,
+    start_date=SCHEDULE_START,
     catchup=False,
     max_active_runs=1,
     max_active_tasks=3,  # ограничение параллелизма по памяти, независимые источники идут параллельно
@@ -523,6 +585,15 @@ with DAG(
     def check_raw(metric: str, table: str):
         _check_raw(metric, table, get_current_context()["run_id"])
 
+    # Сравнение источников между собой нужно делать, когда загружены все группы.
+    # Задача лежит рядом с raw_ready, а не перед ним: сбой мониторинга не блокирует dbt.
+    @task(execution_timeout=timedelta(minutes=5),
+          trigger_rule=TriggerRule.NONE_FAILED_MIN_ONE_SUCCESS)
+    def check_relative_lag():
+        _check_relative_lag(get_current_context()["run_id"])
+
+    relative_lag = check_relative_lag()
+
     for metric, table in METRICS_CONFIG.items():
         with TaskGroup(group_id=metric):
             load = load_raw.override(task_id="load_raw")(metric, table)
@@ -530,3 +601,4 @@ with DAG(
             load >> check
         start >> load
         check >> raw_ready
+        check >> relative_lag
