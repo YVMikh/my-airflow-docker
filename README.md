@@ -176,6 +176,54 @@ dbt test --select int_almaty_air_quality
 
 Make sure the dbt profile is configured to connect to the PostgreSQL database used by the project.
 
+## Maintenance
+
+### Rebuilding an air quality raw table from scratch
+
+Use this procedure when the raw data of one pollutant has to be rebuilt: the table is corrupted or inconsistent, rows were removed or restated at the source (regular loads only insert and update rows, they never delete), or a change of the key or schema requires a clean reload. It replaces the former per-pollutant full-load DAGs that truncated and refilled a table on every run.
+
+Source names equal pollutant codes (`pm25`, `pm10`, `no2`, `no`, `so2`, `co`, `o3`, `h2s`, `tsp`); the table is `public.almaty_<code>_history`. The example below rebuilds `pm25`.
+
+**1. Make sure `almaty_air_raw_sync` is not running** (check the Grid view in the Airflow UI). Do not pause the DAG: a manual run of a paused DAG does not execute.
+
+**2. Reset the table and its watermark in a single transaction:**
+
+```sql
+BEGIN;
+TRUNCATE TABLE public.almaty_pm25_history;
+DELETE FROM monitoring.etl_watermarks WHERE source_name = 'pm25';
+COMMIT;
+```
+
+**3. Trigger `almaty_air_raw_sync` with config** (Airflow UI: *Trigger DAG w/ config*):
+
+```json
+{"mode": "full", "sources": ["pm25"]}
+```
+
+**4. Verify the result:**
+
+```sql
+-- the last load of this source: status 'success', mode 'full', rows_inserted close to rows_read
+SELECT status, mode, rows_read, rows_inserted, rows_unchanged
+FROM monitoring.etl_load_log
+WHERE source_name = 'pm25'
+ORDER BY log_id DESC
+LIMIT 1;
+
+-- the table content and the restored watermark
+SELECT COUNT(*), MIN(datetime_utc), MAX(datetime_utc) FROM public.almaty_pm25_history;
+SELECT * FROM monitoring.etl_watermarks WHERE source_name = 'pm25';
+```
+
+**5. Refresh the dbt layers.** The staging views read the raw tables directly, but the intermediate model is a physical table and must be rebuilt: `dbt run --select int_almaty_air_quality`.
+
+Technical notes:
+
+- **Why the watermark is deleted.** An incremental run reads only records newer than the watermark minus the lookback window. If the table were truncated but the old watermark kept, a failed or skipped full load would leave only the most recent days in the table, silently and without any error. Deleting the watermark in the same transaction as `TRUNCATE` guarantees that any following run, manual or scheduled, reloads the full history until a successful load sets a new watermark. The delete also drops the stored HTTP `ETag`, so the archive is downloaded again. (`mode=full` ignores the watermark and the `ETag` on its own; the deletion makes the procedure safe even if the full run fails or is replaced by a scheduled run.)
+- **Use `TRUNCATE`, not `DROP TABLE`.** `TRUNCATE` keeps the unique index, `NOT NULL` constraints and technical columns (`load_run_id`, `loaded_at`). If a table was dropped, run `almaty_air_raw_init` first to recreate it.
+- **History is preserved.** Previous rows in `monitoring.etl_load_log` and `monitoring.dq_run_results` stay. While the watermark is missing, the `relative_lag_hours` check for this source is recorded as `skip`.
+
 ## Known Limitations
 
 - Weather models are gridded data: hourly wind in particular only weakly agrees with measurements; airport observations represent a single point outside the city centre.

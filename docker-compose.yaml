@@ -16,25 +16,24 @@
 # under the License.
 #
 
-version: '3.8'
-
 x-airflow-common:
   &airflow-common
   image: ${AIRFLOW_IMAGE_NAME:-apache/airflow:2.10.5}
   environment:
     &airflow-common-env
     AIRFLOW__CORE__EXECUTOR: CeleryExecutor
-    AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
-    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:airflow@airflow-postgres/airflow
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_DB_USER:-airflow}:${AIRFLOW_DB_PASSWORD:?задайте AIRFLOW_DB_PASSWORD в .env}@airflow-postgres/airflow
+    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://${AIRFLOW_DB_USER:-airflow}:${AIRFLOW_DB_PASSWORD}@airflow-postgres/airflow
     AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
-    AIRFLOW__CORE__FERNET_KEY: ''
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:?задайте в .env}
+    AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_WEBSERVER_SECRET_KEY:?задайте AIRFLOW_WEBSERVER_SECRET_KEY в .env}
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
-    AIRFLOW__CORE__LOAD_EXAMPLES: 'true'
-    AIRFLOW__API__AUTH_BACKEND: 'airflow.api.auth.backend.basic_auth'
-    AIRFLOW__CORE__ENABLE_XCOM_PICKLING: 'true'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
     AIRFLOW__CORE__TEST_CONNECTION: 'Enabled'
     AIRFLOW__SCHEDULER__ZOMBIE_TASK_THRESHOLD: 300
     AIRFLOW__CORE__KILLED_TASK_CLEANUP_TIME: 60
+    AIRFLOW__WEBSERVER__DEFAULT_UI_TIMEZONE: Asia/Almaty
     _PIP_ADDITIONAL_REQUIREMENTS: "openmeteo-requests requests-cache retry-requests"
   volumes:
     - ./airflow/dags:/opt/airflow/dags
@@ -63,7 +62,7 @@ services:
     user: "root"
     restart: unless-stopped
     ports:
-      - 5054:8088
+        - "127.0.0.1:5054:8088"
     depends_on: *superset-depends-on
     volumes: *superset-volumes
 
@@ -107,56 +106,45 @@ services:
   warehouse-postgres:
     image: postgres:14
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: ${WAREHOUSE_DB_USER}
+      POSTGRES_PASSWORD: ${WAREHOUSE_DB_PASSWORD:?задайте WAREHOUSE_DB_PASSWORD в .env}
       POSTGRES_DB: postgres
     ports:
-      - 5052:5432
+      - "127.0.0.1:5052:5432"
     volumes:
       - postgres-warehouse-volume:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "postgres"]
+      test: ["CMD", "pg_isready", "-U", "${WAREHOUSE_DB_USER:-postgres}"]
       interval: 5s
       retries: 5
     restart: unless-stopped
-
-  client-postgres:
-    image: postgres:13
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: postgres
-    ports:
-      - "5051:5432"
-    volumes:
-      - ./client-postgres-init:/docker-entrypoint-initdb.d
 
   pgadmin:
     container_name: pgadmin4
     image: dpage/pgadmin4
     restart: unless-stopped
     environment:
-      PGADMIN_DEFAULT_EMAIL: admin@admin.com
-      PGADMIN_DEFAULT_PASSWORD: admin
-    ports:
-      - "5050:80"
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:?задайте PGADMIN_EMAIL в .env}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:?задайте PGADMIN_PASSWORD в .env}
+      ports:
+        - "127.0.0.1:5050:80"
 
   airflow-postgres:
     image: postgres:13
     environment:
-      POSTGRES_USER: airflow
-      POSTGRES_PASSWORD: airflow
+      POSTGRES_USER: ${AIRFLOW_DB_USER:-airflow}
+      POSTGRES_PASSWORD: ${AIRFLOW_DB_PASSWORD:?задайте AIRFLOW_DB_PASSWORD в .env}
       POSTGRES_DB: airflow
     volumes:
       - airflow-db-volume:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "airflow"]
+      test: ["CMD", "pg_isready", "-U", "${AIRFLOW_DB_USER:-airflow}"]
       interval: 5s
       retries: 5
     restart: unless-stopped
 
   redis:
-    image: redis:latest
+    image: redis:7
     expose:
       - 6379
     healthcheck:
@@ -173,15 +161,15 @@ services:
       <<: *airflow-common-env
       _AIRFLOW_DB_MIGRATE: "true"
       _AIRFLOW_WWW_USER_CREATE: "true"
-      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-airflow}
-      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-airflow}
+      _AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_ADMIN_USER:-airflow}
+      _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:?задайте AIRFLOW_ADMIN_PASSWORD в .env}
     restart: on-failure
 
   airflow-webserver:
     <<: *airflow-common
     command: webserver
     ports:
-      - 5053:8080
+      - "127.0.0.1:5053:8080"
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
       interval: 10s
@@ -229,7 +217,6 @@ services:
       mode: replicated
       replicas: 2
 
-  # Исправленный блок: синтаксис завершен, добавлены healthcheck и зависимости
   airflow-triggerer:
     <<: *airflow-common
     command: triggerer
@@ -244,7 +231,6 @@ services:
       airflow-init:
         condition: service_completed_successfully
 
-# Обязательная секция для именованных томов данных
 volumes:
   db_home:
   superset_home:
