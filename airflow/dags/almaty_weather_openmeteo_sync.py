@@ -6,7 +6,7 @@ Raw-загрузка почасовой погоды Алматы из Open-Mete
   2. almaty_weather_openmeteo_sync  - регулярное обновление: load_openmeteo -> check_freshness.
 
 Принципы (как в загрузке воздуха):
-  * Модель зафиксирована параметром (по умолчанию era5) и входит в ключ таблицы,
+  * Модель входит в ключ таблицы (по расписанию обновляются ecmwf_ifs и era5 независимыми задачами),
     поэтому ряды разных моделей не смешиваются и не перезаписывают друг друга.
   * Водяная метка в monitoring.etl_watermarks: последний час с реальной температурой, а не
     последняя строка. Пустой хвост (данные ещё не готовы) в таблицу не пишется.
@@ -30,10 +30,11 @@ import pandas as pd
 import pendulum
 from airflow import DAG
 from airflow.decorators import task
-from airflow.exceptions import AirflowFailException
+from airflow.exceptions import AirflowFailException, AirflowSkipException
 from airflow.models.param import Param
 from airflow.operators.python import get_current_context
 from airflow.providers.postgres.hooks.postgres import PostgresHook
+from airflow.utils.task_group import TaskGroup
 from psycopg2 import sql
 
 # ----------------------------------------------------------------------------
@@ -47,8 +48,11 @@ ALMATY_LAT = 43.2565
 ALMATY_LON = 76.9285
 ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 
-DEFAULT_MODEL = "era5"
-MODELS = ["era5_land", "era5", "ecmwf_ifs"]
+# Модели, которые обновляются по расписанию (независимыми задачами). Выбор основной модели сделан
+# по сравнению с метеосводками аэропорта UAAA: ecmwf_ifs точнее по температуре и ветру, era5 - справочный
+# ряд с однородной долгой историей. era5_land отдаёт только температуру и влажность, по расписанию не грузится.
+SCHEDULED_MODELS = ["ecmwf_ifs", "era5"]
+PRIMARY_MODEL = "ecmwf_ifs"  # какую модель брать в STG и витрины (справочно, в коде загрузки не используется)
 
 # Расписание то же, что у загрузки воздуха: 16:00 по Алматы
 SCHEDULE = "0 16 * * *"
@@ -491,26 +495,32 @@ def _check_freshness(run_id: str, model: str) -> None:
 with DAG(
     "almaty_weather_openmeteo_sync",
     default_args=default_args,
-    description="Погода Алматы из Open-Meteo: фиксированная модель, водяная метка, перепроверка окна",
+    description="Погода Алматы из Open-Meteo: несколько моделей независимыми задачами, водяная метка, перепроверка окна",
     schedule=SCHEDULE,
     start_date=SCHEDULE_START,
     catchup=False,
     max_active_runs=1,
     params={
         "mode": Param("incremental", type="string", enum=["incremental", "full"]),
-        "model": Param(DEFAULT_MODEL, type="string", enum=MODELS),
+        "models": Param(SCHEDULED_MODELS, type="array"),  # подмножество моделей для ручного запуска
     },
     tags=["almaty", "weather", "openmeteo", "raw"],
 ) as dag:
 
     @task(execution_timeout=timedelta(minutes=45))
-    def load_openmeteo():
+    def load_openmeteo(model: str):
         ctx = get_current_context()
-        return _load_openmeteo(ctx["run_id"], ctx["params"]["mode"], ctx["params"]["model"])
+        if model not in ctx["params"]["models"]:
+            raise AirflowSkipException(f"{model} не выбрана в параметре models")
+        return _load_openmeteo(ctx["run_id"], ctx["params"]["mode"], model)
 
     @task(execution_timeout=timedelta(minutes=5))
-    def check_freshness():
-        ctx = get_current_context()
-        _check_freshness(ctx["run_id"], ctx["params"]["model"])
+    def check_freshness(model: str):
+        _check_freshness(get_current_context()["run_id"], model)
 
-    load_openmeteo() >> check_freshness()
+    # Независимая группа задач на каждую модель: сбой одной не блокирует другую
+    for model in SCHEDULED_MODELS:
+        with TaskGroup(group_id=model):
+            load = load_openmeteo.override(task_id="load")(model)
+            check = check_freshness.override(task_id="freshness", trigger_rule="none_failed_min_one_success")(model)
+            load >> check
