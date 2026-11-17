@@ -1,0 +1,150 @@
+version: 2
+
+models:
+  - name: stg_weather_openmeteo
+    description: >
+      Hourly weather for one point in Almaty from Open-Meteo, one row per hour (UTC) and model.
+      All loaded models are kept; the primary one (ecmwf_ifs) is selected in the intermediate layer.
+      era5_land has only temperature and humidity. Temperature, humidity, wind and pressure are
+      instantaneous values; precipitation, snowfall and radiation refer to the preceding hour.
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [measured_at, model]
+    columns:
+      - name: measured_at
+        description: Hour of the value, UTC.
+        tests:
+          - not_null
+          - not_in_future
+      - name: model
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['ecmwf_ifs', 'era5', 'era5_land']
+      - name: temperature_c
+        tests:
+          - not_null
+      # completeness is required of the primary model only (era5_land has just two variables)
+      - name: humidity_percent
+        tests:
+          - not_null:
+              config:
+                where: "model = 'ecmwf_ifs'"
+          - value_not_below:
+              arguments:
+                min_value: 0
+              config:
+                severity: warn
+          - value_not_above:
+              arguments:
+                max_value: 100
+              config:
+                severity: warn
+      - name: wind_speed_ms
+        tests:
+          - not_null:
+              config:
+                where: "model = 'ecmwf_ifs'"
+          - value_not_below:
+              arguments:
+                min_value: 0
+              config:
+                severity: warn
+      - name: wind_direction_deg
+        tests:
+          - not_null:
+              config:
+                where: "model = 'ecmwf_ifs'"
+          - value_not_above:
+              arguments:
+                max_value: 360
+              config:
+                severity: warn
+      - name: precipitation_mm
+        description: Sum over the preceding hour.
+        tests:
+          - not_null:
+              config:
+                where: "model = 'ecmwf_ifs'"
+          - value_not_below:
+              arguments:
+                min_value: 0
+              config:
+                severity: warn
+      - name: snowfall_cm
+        description: Sum over the preceding hour.
+      - name: surface_pressure_hpa
+        description: Pressure at the surface of the grid point (not reduced to sea level).
+        tests:
+          - not_null:
+              config:
+                where: "model = 'ecmwf_ifs'"
+          - value_not_below:
+              arguments:
+                min_value: 700
+              config:
+                severity: warn
+          - value_not_above:
+              arguments:
+                max_value: 1100
+              config:
+                severity: warn
+      - name: cloud_cover_percent
+        tests:
+          - not_null:
+              config:
+                where: "model = 'ecmwf_ifs'"
+          - value_not_above:
+              arguments:
+                max_value: 100
+              config:
+                severity: warn
+      - name: shortwave_radiation_wm2
+        description: Mean over the preceding hour.
+        tests:
+          - not_null:
+              config:
+                where: "model = 'ecmwf_ifs'"
+          - value_not_below:
+              arguments:
+                min_value: 0
+              config:
+                severity: warn
+
+  - name: stg_weather_metar
+    description: >
+      Airport (UAAA) METAR reports converted to SI units, one row per report (roughly every 30 minutes,
+      plus special reports). Impossible values become NULL and the row is flagged with has_invalid_value.
+      Reports are not aligned to the hour here. Wind direction is empty for calm and variable wind.
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [station, observed_at]
+    columns:
+      - name: station
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['UAAA']
+      - name: observed_at
+        description: Time of the report, UTC.
+        tests:
+          - not_null
+          - not_in_future
+      - name: temperature_c
+      - name: wind_speed_ms
+      - name: wind_direction_deg
+        description: Empty for calm and variable wind (see is_calm and is_variable_direction).
+      - name: pressure_qnh_hpa
+        description: Altimeter setting (QNH), not station pressure.
+      - name: has_invalid_value
+        description: True when a raw value was outside its physically possible range and was set to NULL.
+        tests:
+          - accepted_values:
+              arguments:
+                values: [false]
+              config:
+                severity: warn

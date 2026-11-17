@@ -1,0 +1,23 @@
+version: 2
+
+models:
+  - name: int_almaty_air_quality
+    description: >
+      Wide hourly table: one row per hour (UTC) and geographical cluster with the maximum, minimum,
+      mean and median of each of nine pollutants (columns <pollutant>_max, _min, _avg, _median;
+      nitrogen oxide NO is exposed as pm_no_*). A pollutant that was not measured in the cluster
+      in that hour is NULL. Built from the staging models with a full outer set of keys.
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [measured_at, cluster_id]
+    columns:
+      - name: measured_at
+        description: Start of the hour, UTC.
+        tests:
+          - not_null
+          - not_in_future
+      - name: cluster_id
+        tests:
+          - not_null
+      - name: cluster_name

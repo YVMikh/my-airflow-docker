@@ -1,0 +1,380 @@
+version: 2
+
+models:
+  - name: stg_almaty_pm25
+    description: >
+      Hourly PM2.5 statistics per geographical cluster (maximum, minimum, mean and median over
+      the readings of the cluster's stations within the hour). Grain: measured_at and cluster_id.
+      Rows with missing or physically impossible values are dropped before aggregation.
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [measured_at, cluster_id]
+      - statistics_consistent:
+          arguments:
+            prefix: 'pm25'   # quoted: an unquoted no is a boolean in YAML
+    columns:
+      - name: measured_at
+        description: Start of the hour, UTC.
+        tests:
+          - not_null
+          - not_in_future
+      - name: cluster_id
+        tests:
+          - not_null
+      - name: cluster_name
+      - name: pm25_max
+        tests:
+          - not_null
+          - value_not_below:
+              arguments:
+                min_value: 0
+              config:
+                severity: warn
+      - name: pm25_min
+      - name: pm25_avg
+      - name: pm25_median
+      - name: pm25_station_count
+        description: Number of distinct stations that contributed to the hour (1 means min, mean and max coincide).
+        tests:
+          - not_null
+          - value_not_below:
+              arguments:
+                min_value: 1
+      - name: pm25_reading_count
+
+  - name: stg_almaty_pm10
+    description: >
+      Hourly PM10 statistics per geographical cluster (maximum, minimum, mean and median over
+      the readings of the cluster's stations within the hour). Grain: measured_at and cluster_id.
+      Rows with missing or physically impossible values are dropped before aggregation.
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [measured_at, cluster_id]
+      - statistics_consistent:
+          arguments:
+            prefix: 'pm10'   # quoted: an unquoted no is a boolean in YAML
+    columns:
+      - name: measured_at
+        description: Start of the hour, UTC.
+        tests:
+          - not_null
+          - not_in_future
+      - name: cluster_id
+        tests:
+          - not_null
+      - name: cluster_name
+      - name: pm10_max
+        tests:
+          - not_null
+          - value_not_below:
+              arguments:
+                min_value: 0
+              config:
+                severity: warn
+      - name: pm10_min
+      - name: pm10_avg
+      - name: pm10_median
+      - name: pm10_station_count
+        description: Number of distinct stations that contributed to the hour (1 means min, mean and max coincide).
+        tests:
+          - not_null
+          - value_not_below:
+              arguments:
+                min_value: 1
+      - name: pm10_reading_count
+
+  - name: stg_almaty_so2
+    description: >
+      Hourly SO2 statistics per geographical cluster (maximum, minimum, mean and median over
+      the readings of the cluster's stations within the hour). Grain: measured_at and cluster_id.
+      Rows with missing or physically impossible values are dropped before aggregation.
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [measured_at, cluster_id]
+      - statistics_consistent:
+          arguments:
+            prefix: 'so2'   # quoted: an unquoted no is a boolean in YAML
+    columns:
+      - name: measured_at
+        description: Start of the hour, UTC.
+        tests:
+          - not_null
+          - not_in_future
+      - name: cluster_id
+        tests:
+          - not_null
+      - name: cluster_name
+      - name: so2_max
+        tests:
+          - not_null
+          - value_not_below:
+              arguments:
+                min_value: 0
+              config:
+                severity: warn
+      - name: so2_min
+      - name: so2_avg
+      - name: so2_median
+      - name: so2_station_count
+        description: Number of distinct stations that contributed to the hour (1 means min, mean and max coincide).
+        tests:
+          - not_null
+          - value_not_below:
+              arguments:
+                min_value: 1
+      - name: so2_reading_count
+
+  - name: stg_almaty_h2s
+    description: >
+      Hourly H2S statistics per geographical cluster (maximum, minimum, mean and median over
+      the readings of the cluster's stations within the hour). Grain: measured_at and cluster_id.
+      Rows with missing or physically impossible values are dropped before aggregation.
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [measured_at, cluster_id]
+      - statistics_consistent:
+          arguments:
+            prefix: 'h2s'   # quoted: an unquoted no is a boolean in YAML
+    columns:
+      - name: measured_at
+        description: Start of the hour, UTC.
+        tests:
+          - not_null
+          - not_in_future
+      - name: cluster_id
+        tests:
+          - not_null
+      - name: cluster_name
+      - name: h2s_max
+        tests:
+          - not_null
+          - value_not_below:
+              arguments:
+                min_value: 0
+              config:
+                severity: warn
+      - name: h2s_min
+      - name: h2s_avg
+      - name: h2s_median
+      - name: h2s_station_count
+        description: Number of distinct stations that contributed to the hour (1 means min, mean and max coincide).
+        tests:
+          - not_null
+          - value_not_below:
+              arguments:
+                min_value: 1
+      - name: h2s_reading_count
+
+  - name: stg_almaty_no2
+    description: >
+      Hourly NO2 statistics per geographical cluster (maximum, minimum, mean and median over
+      the readings of the cluster's stations within the hour). Grain: measured_at and cluster_id.
+      Rows with missing or physically impossible values are dropped before aggregation.
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [measured_at, cluster_id]
+      - statistics_consistent:
+          arguments:
+            prefix: 'no2'   # quoted: an unquoted no is a boolean in YAML
+    columns:
+      - name: measured_at
+        description: Start of the hour, UTC.
+        tests:
+          - not_null
+          - not_in_future
+      - name: cluster_id
+        tests:
+          - not_null
+      - name: cluster_name
+      - name: no2_max
+        tests:
+          - not_null
+          - value_not_below:
+              arguments:
+                min_value: 0
+              config:
+                severity: warn
+      - name: no2_min
+      - name: no2_avg
+      - name: no2_median
+      - name: no2_station_count
+        description: Number of distinct stations that contributed to the hour (1 means min, mean and max coincide).
+        tests:
+          - not_null
+          - value_not_below:
+              arguments:
+                min_value: 1
+      - name: no2_reading_count
+
+  - name: stg_almaty_no
+    description: >
+      Hourly NO statistics per geographical cluster (maximum, minimum, mean and median over
+      the readings of the cluster's stations within the hour). Grain: measured_at and cluster_id.
+      Rows with missing or physically impossible values are dropped before aggregation.
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [measured_at, cluster_id]
+      - statistics_consistent:
+          arguments:
+            prefix: 'no'   # quoted: an unquoted no is a boolean in YAML
+    columns:
+      - name: measured_at
+        description: Start of the hour, UTC.
+        tests:
+          - not_null
+          - not_in_future
+      - name: cluster_id
+        tests:
+          - not_null
+      - name: cluster_name
+      - name: no_max
+        tests:
+          - not_null
+          - value_not_below:
+              arguments:
+                min_value: 0
+              config:
+                severity: warn
+      - name: no_min
+      - name: no_avg
+      - name: no_median
+      - name: no_station_count
+        description: Number of distinct stations that contributed to the hour (1 means min, mean and max coincide).
+        tests:
+          - not_null
+          - value_not_below:
+              arguments:
+                min_value: 1
+      - name: no_reading_count
+
+  - name: stg_almaty_o3
+    description: >
+      Hourly O3 statistics per geographical cluster (maximum, minimum, mean and median over
+      the readings of the cluster's stations within the hour). Grain: measured_at and cluster_id.
+      Rows with missing or physically impossible values are dropped before aggregation.
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [measured_at, cluster_id]
+      - statistics_consistent:
+          arguments:
+            prefix: 'o3'   # quoted: an unquoted no is a boolean in YAML
+    columns:
+      - name: measured_at
+        description: Start of the hour, UTC.
+        tests:
+          - not_null
+          - not_in_future
+      - name: cluster_id
+        tests:
+          - not_null
+      - name: cluster_name
+      - name: o3_max
+        tests:
+          - not_null
+          - value_not_below:
+              arguments:
+                min_value: 0
+              config:
+                severity: warn
+      - name: o3_min
+      - name: o3_avg
+      - name: o3_median
+      - name: o3_station_count
+        description: Number of distinct stations that contributed to the hour (1 means min, mean and max coincide).
+        tests:
+          - not_null
+          - value_not_below:
+              arguments:
+                min_value: 1
+      - name: o3_reading_count
+
+  - name: stg_almaty_tsp
+    description: >
+      Hourly TSP statistics per geographical cluster (maximum, minimum, mean and median over
+      the readings of the cluster's stations within the hour). Grain: measured_at and cluster_id.
+      Rows with missing or physically impossible values are dropped before aggregation.
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [measured_at, cluster_id]
+      - statistics_consistent:
+          arguments:
+            prefix: 'tsp'   # quoted: an unquoted no is a boolean in YAML
+    columns:
+      - name: measured_at
+        description: Start of the hour, UTC.
+        tests:
+          - not_null
+          - not_in_future
+      - name: cluster_id
+        tests:
+          - not_null
+      - name: cluster_name
+      - name: tsp_max
+        tests:
+          - not_null
+          - value_not_below:
+              arguments:
+                min_value: 0
+              config:
+                severity: warn
+      - name: tsp_min
+      - name: tsp_avg
+      - name: tsp_median
+      - name: tsp_station_count
+        description: Number of distinct stations that contributed to the hour (1 means min, mean and max coincide).
+        tests:
+          - not_null
+          - value_not_below:
+              arguments:
+                min_value: 1
+      - name: tsp_reading_count
+
+  - name: stg_almaty_co
+    description: >
+      Hourly CO statistics per geographical cluster (maximum, minimum, mean and median over
+      the readings of the cluster's stations within the hour). Grain: measured_at and cluster_id.
+      Rows with missing or physically impossible values are dropped before aggregation.
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [measured_at, cluster_id]
+      - statistics_consistent:
+          arguments:
+            prefix: 'co'   # quoted: an unquoted no is a boolean in YAML
+    columns:
+      - name: measured_at
+        description: Start of the hour, UTC.
+        tests:
+          - not_null
+          - not_in_future
+      - name: cluster_id
+        tests:
+          - not_null
+      - name: cluster_name
+      - name: co_max
+        tests:
+          - not_null
+          - value_not_below:
+              arguments:
+                min_value: 0
+              config:
+                severity: warn
+      - name: co_min
+      - name: co_avg
+      - name: co_median
+      - name: co_station_count
+        description: Number of distinct stations that contributed to the hour (1 means min, mean and max coincide).
+        tests:
+          - not_null
+          - value_not_below:
+              arguments:
+                min_value: 1
+      - name: co_reading_count

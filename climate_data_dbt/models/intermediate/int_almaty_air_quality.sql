@@ -1,3 +1,7 @@
+{{ config(
+    indexes=[{'columns': ['measured_at', 'cluster_id'], 'unique': True}]
+) }}
+
 {% set gas_mapping = {
     'pm10': 'stg_almaty_pm10',
     'pm25': 'stg_almaty_pm25',
@@ -28,18 +32,21 @@ with
 ),
 {% endfor %}
 
--- 2. Собираем уникальную сетку Час + Кластер со всех источников
+-- 2. Собираем уникальную сетку Час + Кластер со всех источников.
+-- Группировка по ключу (а не select distinct по трём столбцам) гарантирует одну строку на зерно,
+-- даже если название кластера в разных моделях отличается.
 all_keys as (
-    select distinct
+    select
         measured_at,
         cluster_id,
-        cluster_name
+        max(cluster_name) as cluster_name
     from (
         {% for gas in gas_mapping.keys() %}
         select measured_at, cluster_id, cluster_name from {{ gas }}__clean
         {% if not loop.last %} union all {% endif %}
         {% endfor %}
     ) as combined_keys
+    group by measured_at, cluster_id
 )
 
 -- 3. Финальная склейка всех метрик по каждому газу

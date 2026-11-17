@@ -2,15 +2,53 @@ version: 2
 
 sources:
   - name: eco_raw_data
+    description: >
+      Raw tables loaded by Airflow into the public schema. Rows are loaded as delivered by
+      the sources; invalid values are kept here and handled in the staging layer.
     schema: public
+    # Time of the last insert or change of a row, set by the Airflow loaders. It advances only when
+    # a load brings new or corrected rows, so a stalled source becomes visible as stale data.
+    loaded_at_field: loaded_at
+    freshness:
+      warn_after: {count: 48, period: hour}
+      error_after: {count: 120, period: hour}
+
     tables:
-      - name: almaty_pm10_history
+      # --- Air quality: one table per pollutant, key (datetime_utc, station_id) ---
       - name: almaty_pm25_history
+        description: "PM2.5 hourly readings per station (ug/m3). Airflow DAG almaty_air_raw_sync."
+      - name: almaty_pm10_history
+        description: "PM10 hourly readings per station (ug/m3)."
       - name: almaty_so2_history
-      - name: almaty_h2s_history
+        description: "SO2 hourly readings per station (ug/m3)."
       - name: almaty_no2_history
+        description: "NO2 hourly readings per station (ug/m3)."
       - name: almaty_no_history
-      - name: almaty_o3_history
-      - name: almaty_tsp_history
+        description: "NO hourly readings per station (ug/m3)."
       - name: almaty_co_history
+        description: "CO hourly readings per station (ug/m3)."
+      - name: almaty_o3_history
+        description: "O3 hourly readings per station (ug/m3)."
+      - name: almaty_tsp_history
+        description: "TSP hourly readings per station (ug/m3)."
+      - name: almaty_h2s_history
+        description: "H2S readings per station (ug/m3). Closed archive: the source no longer updates."
+        freshness: null  # closed archive, freshness is not checked
+
+      # --- Weather ---
+      - name: almaty_weather_openmeteo_hourly
+        description: >
+          Hourly weather for one point in Almaty from Open-Meteo, key (weather_time, model).
+          Models: ecmwf_ifs (primary), era5 (reference), era5_land (temperature and humidity only,
+          not loaded on schedule). Time in UTC. Precipitation, snowfall and radiation are sums or means
+          over the preceding hour.
+      - name: almaty_weather_metar_obs
+        description: >
+          Airport (UAAA) METAR observations from the Iowa Environmental Mesonet, key (station, valid).
+          Source units (F, knots, inches of mercury, miles, feet); reports roughly every 30 minutes;
+          time in UTC.
+
+      # --- Deprecated: replaced by the two weather tables above; remove together with stg_almaty_weather ---
       - name: almaty_hourly_weather
+        description: "Deprecated weather table from the first loader (no loaded_at column)."
+        freshness: null
