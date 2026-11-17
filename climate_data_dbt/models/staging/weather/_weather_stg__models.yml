@@ -142,9 +142,3 @@ models:
         description: Altimeter setting (QNH), not station pressure.
       - name: has_invalid_value
         description: True when a raw value was outside its physically possible range and was set to NULL.
-        tests:
-          - accepted_values:
-              arguments:
-                values: [false]
-              config:
-                severity: warn

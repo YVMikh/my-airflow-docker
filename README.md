@@ -34,9 +34,9 @@ The pipeline is orchestrated with Apache Airflow 2.10 and runs in a Docker Compo
 | Open-Meteo weather raw ingestion (two models) | Implemented |
 | Airport METAR (UAAA) raw ingestion | Implemented |
 | `monitoring` schema: watermarks, load log, data quality results, source coverage | Implemented |
-| dbt staging and intermediate layers for air quality | Implemented |
-| dbt staging for weather sources | Planned (next) |
-| Intermediate integration of air quality with weather | Planned |
+| dbt staging and intermediate layers for air quality (macro-based, with tests) | Implemented |
+| dbt staging for weather sources (Open-Meteo, airport METAR) | Implemented |
+| Intermediate weather model and integration of air quality with weather | Implemented |
 | Marts layer (hourly, daily, weather impact) | Planned |
 | dbt build triggered from Airflow, `dbt source freshness` | Planned |
 | Superset dashboards (including a data quality dashboard) | Planned |
@@ -48,10 +48,13 @@ flowchart LR
     A["AirDatakz open data<br/>9 pollutants, csv.gz"] --> R1[("raw: almaty_*_history")]
     B["Open-Meteo archive API<br/>ecmwf_ifs, era5"] --> R2[("raw: almaty_weather_openmeteo_hourly")]
     C["Iowa Environmental Mesonet<br/>METAR, Almaty airport UAAA"] --> R3[("raw: almaty_weather_metar_obs")]
-    R1 --> S["dbt staging<br/>(cluster + hourly aggregation)"]
-    S --> I["dbt intermediate<br/>(wide analytical table)"]
-    R2 -. planned .-> S
-    R3 -. planned .-> S
+    R1 --> S1["dbt staging: air quality<br/>(cluster + hourly aggregation)"]
+    R2 --> S2["dbt staging: weather"]
+    R3 --> S2
+    S1 --> I1["int_almaty_air_quality<br/>(wide table)"]
+    S2 --> I2["int_weather_hourly"]
+    I1 --> I3["int_almaty_air_quality_weather"]
+    I2 --> I3
     AF["Airflow"] --> M[("monitoring schema")]
 ```
 
@@ -96,19 +99,28 @@ Raw-layer quality checks (they record results and do not stop the DAG; invalid v
 
 Load-stopping checks (rolled back and logged as `failed`) cover malformed responses, wrong variable sets, non-hourly time steps, duplicate timestamps, timestamps outside the requested range, and an abnormal share of unreadable rows.
 
-### 3. Staging layer — dbt Core (air quality)
+### 3. Staging layer — dbt Core
 
-- Database views in the `dbt_dev_staging` schema.
-- Filters out invalid and incomplete records, including observations with NULL measurement values.
+**Air quality** (`models/staging/air_quality/`, materialized as tables with a unique index on the grain):
+
+- One macro, `stg_air_quality_hourly`, builds all nine pollutant models (`stg_almaty_<pollutant>`), so the logic is defined once.
+- Records with missing values, a missing cluster, or negative concentrations are dropped before aggregation (the lower bound is the variable `air_quality_min_value`, 0 by default).
 - **Geographical cluster aggregation:** consolidates observations from multiple independent sensors within one cluster.
 - **Hourly statistical aggregation:** timestamps are truncated to the hour with `date_trunc`; for each pollutant and cluster the model calculates MAX, MIN, AVG and the median (`percentile_cont(0.5)`, robust to outliers from individual sensors). Keeping the full set of statistics retains the spread of readings inside a cluster and lets the analytical layer distinguish a local spike from cluster-wide pollution.
-- Reduces data volume and prevents row multiplication in later joins.
+- `<pollutant>_station_count` and `<pollutant>_reading_count` show how many stations and readings stand behind an hour (a cluster with one station has identical minimum, mean and maximum).
 
-### 4. Intermediate layer — dbt Core (air quality)
+**Weather** (`models/staging/weather/`, views): only renaming, type casting and unit conversion.
 
-- A physical table in the `dbt_dev_intermediate` schema.
-- Processes 9 pollutants (PM2.5, PM10, SO2, H2S, NO2, NO, O3, TSP, CO) with Jinja loops into one wide analytical table with four statistics per cluster and hour.
-- **Performance:** a join fan-out was resolved by moving aggregation to the staging layer, which reduced the intermediate dataset from an 8 GB join result to a compact table (about 340x, measured before the additional statistics were added).
+- `stg_weather_openmeteo` keeps every loaded model (one row per hour and model).
+- `stg_weather_metar` converts airport reports to SI units. Physically impossible values (typos in the original reports) become NULL and the row is flagged with `has_invalid_value`; calm and variable wind are flagged instead of dropped.
+
+### 4. Intermediate layer — dbt Core
+
+Physical tables in the `dbt_dev_intermediate` schema with unique indexes on the grain.
+
+- **`int_almaty_air_quality`:** processes 9 pollutants (PM2.5, PM10, SO2, H2S, NO2, NO, O3, TSP, CO) with Jinja loops into one wide table with four statistics per cluster and hour. The key grid is built by grouping on (hour, cluster), which guarantees one row per grain. **Performance:** a join fan-out was resolved by moving aggregation to the staging layer, which reduced the intermediate dataset from an 8 GB join result to a compact table (about 340x, measured before the additional statistics were added).
+- **`int_weather_hourly`:** one row per hour (UTC). Model columns come from a single model selected by the variable `primary_weather_model` (`ecmwf_ifs`); precipitation, snowfall and radiation, which describe the preceding hour in Open-Meteo, are aligned to the hour by taking the row labelled one hour later (`weather_flux_label_offset_hours`). Wind is also given as east/north components with a calm flag. Airport observations are added as separate `obs_*` columns (the nearest report within half an hour, a report without invalid values preferred) and are never mixed with model values.
+- **`int_almaty_air_quality_weather`:** air quality joined with the weather of the same hour (`LEFT JOIN`), so measurements are not lost when weather is missing (`has_weather` flag). One weather point serves the whole city.
 
 ## Weather Source Selection
 
@@ -132,7 +144,8 @@ Airport observations (UAAA) cover 2020-01-01 to the present with about 126,500 o
 
 ## Data Quality and Validation
 
-- **dbt tests:** the combination of `measured_at` and `cluster_id` is unique and not NULL in the air quality model.
+- **dbt tests** cover every layer: uniqueness of the grain, not-null keys, ranges, timestamps not in the future, consistency of the statistics (minimum <= median <= maximum, mean within the range) and, in the intermediate layer, tests that the joins neither lose nor multiply rows (key coverage, rows per pollutant, rows after the weather join, continuity of the hourly weather series). Generic tests without external packages live in `tests/generic/`.
+- **Source freshness:** `dbt source freshness` checks the `loaded_at` column of the raw tables (closed archives are excluded).
 - **Raw-layer constraints:** unique keys enforced by PostgreSQL (`datetime_utc` + `station_id` for pollutants, `weather_time` + `model` for Open-Meteo, `station` + `valid` for METAR) and `NOT NULL` key columns.
 - **Raw-layer monitoring:** the checks listed above, stored historically in `monitoring.dq_run_results` for a future data quality dashboard.
 - **Error separation:** source or API failures, infrastructure failures, data quality violations, completeness problems and transformation errors are distinguished in the load log and check results.
@@ -161,20 +174,16 @@ Unpause the sync DAGs. They run daily at 16:00 `Asia/Almaty`. Parameters: `mode`
 ### 5. dbt transformations
 
 ```bash
-# Clean previous dbt build artifacts
-dbt clean
+cd climate_data_dbt
 
-# Build staging views (data filtering and hourly aggregation)
-dbt run --select path:models/staging
+# Build all models and run all tests (staging, intermediate)
+dbt build
 
-# Build the intermediate analytical table
-dbt run --select int_almaty_air_quality
-
-# Run data quality tests
-dbt test --select int_almaty_air_quality
+# Check the freshness of the raw tables
+dbt source freshness
 ```
 
-Make sure the dbt profile is configured to connect to the PostgreSQL database used by the project.
+Useful selections: `dbt build --select staging.air_quality+` (air quality and everything built from it), `dbt build --select staging.weather int_weather_hourly+` (weather). Make sure the dbt profile is configured to connect to the PostgreSQL database used by the project.
 
 ## Maintenance
 
@@ -229,14 +238,17 @@ Technical notes:
 - Weather models are gridded data: hourly wind in particular only weakly agrees with measurements; airport observations represent a single point outside the city centre.
 - The airport source has a few multi-day gaps (documented in `monitoring.source_coverage`); gaps are not filled.
 - The `ecmwf_ifs` series is not homogeneous in accuracy over time (see above).
+- About nine airport reports (2022 – 2024) contain typos in the original METAR text (for example a truncated pressure group or a wind of 81 m/s). They are not deleted: the impossible value becomes NULL in staging and the row is flagged.
+- Weather values for an air quality hour assume that the air quality timestamp marks the start of the hour; if the source documents otherwise, the alignment is changed with the variable `weather_flux_label_offset_hours`.
+- One weather point serves the whole city, so clusters of the same hour share the same weather.
 - Correlation between weather and pollution does not prove causation; seasonality, time of day and emission sources must be considered in analysis.
 
 ## Future Development
 
-- **Weather staging and intermediate integration:** staging models for the Open-Meteo and METAR tables (unit conversion, range handling), then joining weather to hourly air quality with a `LEFT JOIN` so pollution measurements are never lost when weather is missing. Wind will be represented as east/north components with a calm flag instead of an averaged direction.
 - **Marts layer:** hourly and daily air quality marts and a weather-impact mart, including rolling 24-hour averages and a daily Air Quality Index.
 - **Airflow + dbt integration:** run dbt after raw loads complete, with `dbt source freshness` and `dbt build` including tests.
 - **BI visualization:** Apache Superset dashboards for air quality and climate trends and for Data Quality Monitoring.
+- **A long-format integration model** (one row per hour, cluster and pollutant) as the main intermediate model, with the wide table built from it.
 - **Incremental dbt models** with an updated recent-period window for late-arriving data.
 
 ## Data Sources and Attribution
