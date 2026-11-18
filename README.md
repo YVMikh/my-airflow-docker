@@ -6,7 +6,7 @@ This Data Engineering project collects, consolidates, and transforms weather and
 It implements an automated, multi-layer ELT pipeline: external sources are loaded into a centralized PostgreSQL database as raw observations, monitored by a dedicated `monitoring` schema, and transformed into analytical datasets with dbt Core.
 The pipeline is orchestrated with Apache Airflow 2.10 and runs in a Docker Compose environment.
 
-**Project status: active development.** Raw ingestion and monitoring for all sources are implemented and running; the dbt layers for air quality are implemented; weather integration into dbt and the marts layer are the next steps (see the status table).
+**Project status: active development.** Raw ingestion and monitoring for all sources are implemented and running; the dbt staging and intermediate layers for air quality and weather, including the integration of air quality with weather, are implemented. The marts layer, dbt runs triggered from Airflow and Superset dashboards are the next steps (see the status table).
 
 ## Objectives
 
@@ -37,8 +37,9 @@ The pipeline is orchestrated with Apache Airflow 2.10 and runs in a Docker Compo
 | dbt staging and intermediate layers for air quality (macro-based, with tests) | Implemented |
 | dbt staging for weather sources (Open-Meteo, airport METAR) | Implemented |
 | Intermediate weather model and integration of air quality with weather | Implemented |
+| `dbt source freshness` for raw tables (manual run) | Implemented |
 | Marts layer (hourly, daily, weather impact) | Planned |
-| dbt build triggered from Airflow, `dbt source freshness` | Planned |
+| dbt build and `dbt source freshness` triggered from Airflow | Planned |
 | Superset dashboards (including a data quality dashboard) | Planned |
 
 ## Pipeline Architecture
@@ -101,18 +102,20 @@ Load-stopping checks (rolled back and logged as `failed`) cover malformed respon
 
 ### 3. Staging layer — dbt Core
 
+Layers are configured in `dbt_project.yml`. A custom schema is appended to the target schema, so with target schema `dbt_dev` the layers are built in `dbt_dev_staging`, `dbt_dev_intermediate` and `dbt_dev_marts` (the last one is reserved for the planned marts). By default staging is materialized as views, intermediate and marts as tables; the air quality staging models override this in their own `config` and are tables with a unique index on (`measured_at`, `cluster_id`). The weather model used downstream is set in one place, the variable `primary_weather_model` (`ecmwf_ifs`).
+
 **Air quality** (`models/staging/air_quality/`, materialized as tables with a unique index on the grain):
 
 - One macro, `stg_air_quality_hourly`, builds all nine pollutant models (`stg_almaty_<pollutant>`), so the logic is defined once.
-- Records with missing values, a missing cluster, or negative concentrations are dropped before aggregation (the lower bound is the variable `air_quality_min_value`, 0 by default).
+- Records with missing values, a missing cluster, or negative concentrations are dropped before aggregation (the lower bound is the variable `air_quality_min_value`, 0 by default, defined in the macro with `var('air_quality_min_value', 0)`; the value `'none'` keeps every row).
 - **Geographical cluster aggregation:** consolidates observations from multiple independent sensors within one cluster.
 - **Hourly statistical aggregation:** timestamps are truncated to the hour with `date_trunc`; for each pollutant and cluster the model calculates MAX, MIN, AVG and the median (`percentile_cont(0.5)`, robust to outliers from individual sensors). Keeping the full set of statistics retains the spread of readings inside a cluster and lets the analytical layer distinguish a local spike from cluster-wide pollution.
 - `<pollutant>_station_count` and `<pollutant>_reading_count` show how many stations and readings stand behind an hour (a cluster with one station has identical minimum, mean and maximum).
 
 **Weather** (`models/staging/weather/`, views): only renaming, type casting and unit conversion.
 
-- `stg_weather_openmeteo` keeps every loaded model (one row per hour and model).
-- `stg_weather_metar` converts airport reports to SI units. Physically impossible values (typos in the original reports) become NULL and the row is flagged with `has_invalid_value`; calm and variable wind are flagged instead of dropped.
+- `stg_weather_openmeteo` keeps every loaded model (one row per hour and model) together with the grid cell coordinates and elevation. Only renaming and type casting happen here; the primary model is chosen in the intermediate layer.
+- `stg_weather_metar` converts airport reports to SI units, one row per report (not aligned to the hour). Besides temperature, wind and pressure it keeps dew point, relative humidity, gusts, visibility, sea-level pressure, sky cover and cloud base layers, present weather codes, the raw METAR text and station metadata. Physically impossible values (typos in the original reports) become NULL and the row is flagged with `has_invalid_value`; calm and variable wind are flagged (`is_calm`, `is_variable_direction`) instead of dropped. `pressure_qnh_hpa` is the altimeter setting, not station pressure.
 
 ### 4. Intermediate layer — dbt Core
 
@@ -140,12 +143,12 @@ Findings:
 
 Collected variables: temperature, relative humidity, wind speed and direction (10 m), precipitation and snowfall (hourly sums), surface pressure, cloud cover, shortwave radiation. Time is stored in UTC.
 
-Airport observations (UAAA) cover 2020-01-01 to the present with about 126,500 observations (reports roughly every 30 minutes) and complete monthly coverage; 26 gaps longer than three hours exist, the longest being about 4 days (October 2022). Values are stored in the source units; unit conversion and hour alignment are planned for the staging and intermediate layers.
+Airport observations (UAAA) cover 2020-01-01 to the present with about 126,500 observations (reports roughly every 30 minutes) and complete monthly coverage; 26 gaps longer than three hours exist, the longest being about 4 days (October 2022).
 
 ## Data Quality and Validation
 
-- **dbt tests** cover every layer: uniqueness of the grain, not-null keys, ranges, timestamps not in the future, consistency of the statistics (minimum <= median <= maximum, mean within the range) and, in the intermediate layer, tests that the joins neither lose nor multiply rows (key coverage, rows per pollutant, rows after the weather join, continuity of the hourly weather series). Generic tests without external packages live in `tests/generic/`.
-- **Source freshness:** `dbt source freshness` checks the `loaded_at` column of the raw tables (closed archives are excluded).
+- **dbt tests** cover every layer: uniqueness of the grain, not-null keys, ranges, timestamps not in the future, consistency of the statistics (minimum <= median <= maximum, mean within the range) and, in the intermediate layer, tests that the joins neither lose nor multiply rows (key coverage, rows per pollutant, rows after the weather join, continuity of the hourly weather series). Generic tests without external packages live in `tests/generic/`. Weather staging is tested for uniqueness of the grain (`measured_at` + `model`, `station` + `observed_at`), accepted models and station, and timestamps not in the future; completeness (`not_null`) is required of the primary model `ecmwf_ifs` only, because `era5_land` has just two variables, and physical range checks run with severity `warn` so they do not stop the build. A separate test, `stg_weather_metar_invalid_values`, lists the METAR reports flagged with `has_invalid_value`: about nine such reports are known (2022 – 2024), so isolated cases are normal; the test warns above 15 and fails above 500, which would point to a parsing problem rather than typos in the source.
+- **Source freshness:** `dbt source freshness` checks the `loaded_at` column of the raw tables (closed archives are excluded). It is currently run manually; running it automatically after raw loads is planned.
 - **Raw-layer constraints:** unique keys enforced by PostgreSQL (`datetime_utc` + `station_id` for pollutants, `weather_time` + `model` for Open-Meteo, `station` + `valid` for METAR) and `NOT NULL` key columns.
 - **Raw-layer monitoring:** the checks listed above, stored historically in `monitoring.dq_run_results` for a future data quality dashboard.
 - **Error separation:** source or API failures, infrastructure failures, data quality violations, completeness problems and transformation errors are distinguished in the load log and check results.
@@ -225,7 +228,7 @@ SELECT COUNT(*), MIN(datetime_utc), MAX(datetime_utc) FROM public.almaty_pm25_hi
 SELECT * FROM monitoring.etl_watermarks WHERE source_name = 'pm25';
 ```
 
-**5. Refresh the dbt layers.** The staging views read the raw tables directly, but the intermediate model is a physical table and must be rebuilt: `dbt run --select int_almaty_air_quality`.
+**5. Refresh the dbt layers.** The air quality staging models and the intermediate models are physical tables, so none of them updates on its own after the raw table is rebuilt. Rebuild the staging model of this pollutant and everything built from it: `dbt build --select stg_almaty_pm25+` (this also rebuilds `int_almaty_air_quality` and `int_almaty_air_quality_weather` and runs their tests). The weather staging models are views and need no rebuild.
 
 Technical notes:
 
@@ -236,6 +239,7 @@ Technical notes:
 ## Known Limitations
 
 - Weather models are gridded data: hourly wind in particular only weakly agrees with measurements; airport observations represent a single point outside the city centre.
+- Airport pressure (`pressure_qnh_hpa`, altimeter setting) and model `surface_pressure_hpa` (pressure at the grid point surface) are different quantities and must not be compared directly.
 - The airport source has a few multi-day gaps (documented in `monitoring.source_coverage`); gaps are not filled.
 - The `ecmwf_ifs` series is not homogeneous in accuracy over time (see above).
 - About nine airport reports (2022 – 2024) contain typos in the original METAR text (for example a truncated pressure group or a wind of 81 m/s). They are not deleted: the impossible value becomes NULL in staging and the row is flagged.
