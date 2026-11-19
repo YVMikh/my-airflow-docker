@@ -2,3 +2,6 @@ openmeteo-requests
 requests-cache
 retry-requests
 pandas
+# фиксация в пределах минорной версии (будут ставиться только стабильные патчи)
+dbt-core==1.12.7
+dbt-postgres==1.11.0
