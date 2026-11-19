@@ -21,3 +21,52 @@ models:
         tests:
           - not_null
       - name: cluster_name
+
+  - name: int_air_quality_hourly
+    description: >
+      Long-format air quality model and the main integration model for air quality: one row per
+      hour (UTC, start of the hour), geographical cluster and pollutant, with the maximum, minimum,
+      mean and median of value_ugm3 and the number of stations. Pollutant codes match the staging
+      model suffixes (pm25, pm10, so2, h2s, no2, no, o3, tsp, co); nitrogen oxide is `no`.
+      The wide table int_almaty_air_quality is kept as a compatible view of the same statistics.
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [measured_at, cluster_id, pollutant]
+    columns:
+      - name: measured_at
+        description: Start of the hour, UTC.
+        tests:
+          - not_null
+          - not_in_future
+      - name: cluster_id
+        tests:
+          - not_null
+      - name: pollutant
+        description: Pollutant code, the suffix of the staging model name.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                # 'no' must stay quoted: unquoted, YAML reads it as boolean false
+                values: ['pm25', 'pm10', 'so2', 'h2s', 'no2', 'no', 'o3', 'tsp', 'co']
+      - name: value_max
+        description: Maximum value across the cluster's readings in the hour, ug/m3.
+        tests:
+          - not_null
+      - name: value_min
+        description: Minimum value across the cluster's readings in the hour, ug/m3.
+        tests:
+          - not_null
+      - name: value_avg
+        description: Mean value across the cluster's readings in the hour, ug/m3.
+        tests:
+          - not_null
+      - name: value_median
+        description: Median value across the cluster's readings in the hour, ug/m3.
+        tests:
+          - not_null
+      - name: station_count
+        description: Number of distinct stations that contributed to the hour and cluster.
+        tests:
+          - not_null
