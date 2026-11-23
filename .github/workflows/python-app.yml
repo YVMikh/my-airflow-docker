@@ -1,4 +1,4 @@
-name: Python application
+name: Full Data & Python Check
 
 on:
   push:
@@ -10,29 +10,49 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  check-all:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - name: Скачать код
+      uses: actions/checkout@v4
 
-    - name: Set up Python 3.12
+    - name: Установить Python 3.12
       uses: actions/setup-python@v5
       with:
         python-version: "3.12"
-        cache: 'pip' # Автоматически кэширует библиотеки из requirements.txt
+        cache: 'pip'
 
-    - name: Install dependencies
+    - name: Установить зависимости и линтеры
       run: |
         python -m pip install --upgrade pip
-        pip install flake8 pytest
-        pip install -r requirements.txt
+        pip install flake8 pytest sqlfluff sqlfluff-templater-dbt
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-    - name: Lint with flake8
+    # 1. Python: синтаксис и строгий линтер
+    - name: Python Syntax & Lint (flake8)
       run: |
         flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+        flake8 . --count --max-complexity=10 --max-line-length=127 --statistics
 
-    - name: Test with pytest
+    # 2. Python: юнит-тесты
+    - name: Python Tests (pytest)
+      run: pytest || [ $? -eq 5 ]
+
+    # 3. Docker Compose: проверка валидности конфигурации
+    - name: Validate Docker Compose
       run: |
-        pytest || [ $? -eq 5 ]
+        if [ -f docker-compose.yml ]; then docker compose -f docker-compose.yml config -q; fi
+
+    # 4. SQL: проверка стиля и синтаксиса SQL-файлов
+    - name: SQL Lint (SQLFluff)
+      run: |
+        # Замените postgres на ваш диалект (clickhouse, bigquery, snowflake и др.)
+        sqlfluff lint models/ --dialect postgres
+
+    # 5. dbt: компиляция моделей без подключения к боевой БД
+    - name: dbt Compile
+      working-directory: ./dbt_project # Укажите путь к папке с dbt_project.yml
+      run: |
+        dbt deps
+        dbt compile --profiles-dir .
