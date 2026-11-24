@@ -15,7 +15,7 @@ The project implements an automated, multi-layer ELT pipeline. Airflow loads raw
 - Load data incrementally and idempotently, with independent watermarks per source.
 - Aggregate multi-station observations into stable geographical clusters, preserving the distribution of values within each cluster (maximum, minimum, mean, and median).
 - Track load history and data quality in a dedicated monitoring schema.
-- Build an analytical model that joins air quality with weather for future BI visualization in Apache Superset.
+- Build analytical models for future BI visualization in Apache Superset: a long-format air quality model as the main integration model, and a model that joins air quality with weather.
 
 ## Technology Stack
 
@@ -99,11 +99,12 @@ Alerting on `warn` and `alert` results is not implemented yet.
 
 | Model | Description |
 |---|---|
-| `int_almaty_air_quality` | Physical table. Processes the 9 pollutants with Jinja loops into one wide, de-normalized table with four statistics (max, min, mean, median) per pollutant, cluster, and hour |
+| `int_air_quality_hourly` | Main integration model for air quality, in long format: one row per hour, geographical cluster, and pollutant, with four statistics (max, min, mean, median) and the number of stations. Physical table with a unique index on the grain. Pollutant codes: `pm25`, `pm10`, `so2`, `h2s`, `no2`, `no`, `o3`, `tsp`, `co` |
+| `int_almaty_air_quality` | Wide-format layer kept for compatibility. Physical table with one row per hour and cluster, built with Jinja loops over the 9 pollutants, with four statistics per pollutant. Nitrogen oxide columns use the `pm_no_` prefix |
 | `int_weather_hourly` | Hourly weather built from the primary model (`ecmwf_ifs`) and METAR |
 | `int_almaty_air_quality_weather` | Air quality joined with hourly weather |
 
-**Performance optimization.** A data fan-out in the `JOIN` was resolved by moving aggregation to the staging layer. The intermediate dataset shrank from an 8 GB join result to a compact table (about 340x, measured before the additional statistics were added).
+**Performance optimization.** The first version of the wide table was built in an uncontrolled and redundant way: a data fan-out in the `JOIN` multiplied rows, and the table grew to 8 GB. The build was redesigned: aggregation was moved to the staging layer, and the table is now assembled from a single grid of keys with joins on a unique grain (hour and cluster). The table shrank from 8 GB to about 57 MB (roughly 140x). Uniqueness and row count tests now guard the grain, so the build no longer produces such an inefficient result.
 
 ## Data Quality and Testing
 
@@ -114,10 +115,11 @@ dbt tests cover:
 - uniqueness of the grain and of composite keys, and absence of NULLs in key columns;
 - value ranges, non-negativity, and no timestamps in the future;
 - consistency of aggregated statistics (`min <= median <= max`, `min <= avg <= max`);
-- accepted values for model and station fields;
+- accepted values for model, station, and pollutant fields;
 - key coverage between layers and completeness of the primary weather model;
 - continuity of the hourly weather series;
-- joins that neither duplicate nor lose rows.
+- joins that neither duplicate nor lose rows;
+- row count of the long air quality model matching the sum of the pollutant staging models.
 
 Custom generic tests are defined in `climate_data_dbt/tests/generic/` and do not require external dbt packages. Some checks are configured with `warn` severity. Freshness thresholds for raw sources are defined in `sources.yml` and are checked with `dbt source freshness`.
 
@@ -201,7 +203,6 @@ Make sure the dbt profile points to the project's PostgreSQL database.
 **BI**
 
 - Apache Superset dashboards for air quality and climate trends, including a data quality dashboard based on the monitoring schema.
-- A long-format integration model for air quality.
 
 **Technical debt**
 
