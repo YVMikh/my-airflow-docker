@@ -51,13 +51,13 @@ jobs:
 
     # 4. SQL: проверка стиля и синтаксиса SQL-файлов
     - name: SQL Lint (SQLFluff)
+      working-directory: ./climate_data_dbt
       run: |
-        # Замените postgres на ваш диалект (clickhouse, bigquery, snowflake и др.)
-        sqlfluff lint models/ --dialect postgres
+        sqlfluff lint models/ 
 
     # 5. dbt: компиляция моделей без подключения к боевой БД
     - name: dbt Compile
-      working-directory: ./dbt_project # Укажите путь к папке с dbt_project.yml
+      working-directory: ./climate_data_dbt
       run: |
         dbt deps
         dbt compile --profiles-dir .
