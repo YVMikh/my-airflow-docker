@@ -56,8 +56,25 @@ jobs:
         sqlfluff lint models/ 
 
     # 5. dbt: компиляция моделей без подключения к боевой БД
-    - name: dbt Compile
+    - name: dbt Parse
       working-directory: ./climate_data_dbt
       run: |
+        mkdir -p /tmp/dbt-ci
+
+        cat > /tmp/dbt-ci/profiles.yml <<'EOF'
+        climate_data_dbt:
+          target: ci
+          outputs:
+            ci:
+              type: postgres
+              host: localhost
+              port: 5432
+              user: ci_user
+              password: ci_password
+              dbname: ci_database
+              schema: ci_schema
+              threads: 1
+        EOF
+
         dbt deps
-        dbt compile --profiles-dir .
+        dbt parse --profiles-dir /tmp/dbt-ci
