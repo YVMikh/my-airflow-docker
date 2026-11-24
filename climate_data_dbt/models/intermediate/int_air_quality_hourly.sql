@@ -22,15 +22,15 @@
 {% set pollutants = ['pm25', 'pm10', 'so2', 'h2s', 'no2', 'no', 'o3', 'tsp', 'co'] %}
 
 {% for code in pollutants %}
-select
-    measured_at,
-    cluster_id,
-    '{{ code }}' as pollutant,
-    {{ code }}_max           as value_max,
-    {{ code }}_min           as value_min,
-    {{ code }}_avg           as value_avg,
-    {{ code }}_median        as value_median,
-    {{ code }}_station_count as station_count
-from {{ ref('stg_almaty_' ~ code) }}
-{% if not loop.last %}union all{% endif %}
+    select
+        measured_at,
+        cluster_id,
+        '{{ code }}' as pollutant,
+        {{ code }}_max as value_max,
+        {{ code }}_min as value_min,
+        {{ code }}_avg as value_avg,
+        {{ code }}_median as value_median,
+        {{ code }}_station_count as station_count
+    from {{ ref('stg_almaty_' ~ code) }}
+    {% if not loop.last %}union all{% endif %}
 {% endfor %}

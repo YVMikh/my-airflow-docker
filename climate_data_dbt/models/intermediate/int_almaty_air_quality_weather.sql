@@ -11,7 +11,7 @@
 #}
 
 select
-    a.*,
+    a.*,  -- noqa: AM04
     (w.measured_at is not null) as has_weather,
     w.temperature_c,
     w.humidity_percent,
@@ -43,6 +43,6 @@ select
     w.obs_is_calm,
     w.obs_is_variable_direction,
     w.obs_has_invalid_value
-from {{ ref('int_almaty_air_quality') }} a
-left join {{ ref('int_weather_hourly') }} w
-    on w.measured_at = a.measured_at
+from {{ ref('int_almaty_air_quality') }} as a
+left join {{ ref('int_weather_hourly') }} as w
+    on a.measured_at = w.measured_at

@@ -40,8 +40,8 @@ model_aligned as (
         f.snowfall_cm,
         f.shortwave_radiation_wm2,
         m.grid_elevation_m
-    from model_hours m
-    left join model_hours f
+    from model_hours as m
+    left join model_hours as f
         on f.measured_at = m.measured_at + interval '{{ flux_offset }} hour'
 ),
 
@@ -105,8 +105,8 @@ select
     w.humidity_percent,
     w.wind_speed_ms,
     w.wind_direction_deg,
-    cast(w.wind_u_ms as numeric(6,2)) as wind_u_ms,
-    cast(w.wind_v_ms as numeric(6,2)) as wind_v_ms,
+    cast(w.wind_u_ms as numeric(6, 2)) as wind_u_ms,
+    cast(w.wind_v_ms as numeric(6, 2)) as wind_v_ms,
     w.is_calm_wind,
     w.surface_pressure_hpa,
     w.cloud_cover_percent,
@@ -122,8 +122,8 @@ select
     o.obs_wind_speed_ms,
     o.obs_wind_direction_deg,
     o.obs_wind_gust_ms,
-    cast(o.obs_wind_u_ms as numeric(6,2)) as obs_wind_u_ms,
-    cast(o.obs_wind_v_ms as numeric(6,2)) as obs_wind_v_ms,
+    cast(o.obs_wind_u_ms as numeric(6, 2)) as obs_wind_u_ms,
+    cast(o.obs_wind_v_ms as numeric(6, 2)) as obs_wind_v_ms,
     o.obs_pressure_qnh_hpa,
     o.obs_visibility_km,
     o.obs_sky_cover_1,
@@ -132,6 +132,6 @@ select
     o.obs_is_calm,
     o.obs_is_variable_direction,
     o.obs_has_invalid_value
-from wind w
-left join obs o
-    on o.measured_at = w.measured_at
+from wind as w
+left join obs as o
+    on w.measured_at = o.measured_at
