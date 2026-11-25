@@ -1,12 +1,14 @@
 # Climate and Air Quality Data Pipeline — Almaty
 
+[![CI](https://github.com/YVMikh/my-airflow-docker/actions/workflows/python-app.yml/badge.svg?branch=main)](https://github.com/YVMikh/my-airflow-docker/actions/workflows/python-app.yml)
+
 ## Project Overview
 
 This Data Engineering project collects, consolidates, and transforms air quality and weather data for Almaty, Kazakhstan, from publicly available sources.
 
 The project implements an automated, multi-layer ELT pipeline. Airflow loads raw observations from external sources into PostgreSQL, and dbt Core transforms them into analytical datasets. Load monitoring and data quality checks are written to a dedicated `monitoring` schema. The whole stack runs locally in Docker Compose.
 
-**Project status:** Active development. Ingestion, monitoring, staging, intermediate models, and dbt tests are implemented. The marts layer and BI dashboards are planned.
+**Project status:** Active development. Ingestion, monitoring, staging, intermediate models, dbt tests, and automated CI checks are implemented. The marts layer and BI dashboards are planned.
 
 ## Objectives
 
@@ -27,6 +29,9 @@ The project implements an automated, multi-layer ELT pipeline. Airflow loads raw
 | dbt Core 1.12.7 (dbt-postgres 1.11.0) | Layered transformations, model management, data tests |
 | Docker Compose | Containerized local environment |
 | Git | Version control |
+| GitHub Actions | Continuous integration |
+| Flake8 / SQLFluff | Python and SQL linting |
+| pytest | Python unit testing |
 
 ## Data Sources
 
@@ -108,7 +113,7 @@ Alerting on `warn` and `alert` results is not implemented yet.
 
 ## Data Quality and Testing
 
-Data quality is checked at two levels: dbt tests on the transformed layers and raw-layer checks in Airflow (see Monitoring).
+Data quality is checked at two levels: dbt tests on the transformed layers and raw-layer checks in Airflow (see Monitoring). Python unit tests complement these checks by validating ingestion logic independently of the database.
 
 dbt tests cover:
 
@@ -129,6 +134,34 @@ To run the tests:
 dbt test
 ```
 
+### Python Unit Tests
+
+The initial test suite (`tests/test_weather_metar.py`) contains 14 test cases for the METAR ingestion logic:
+
+- Time interval splitting, including partial intervals, empty periods, and leap-year boundaries.
+- CSV parsing, including empty and invalid responses, missing required columns, and invalid values.
+- Data cleaning, including filtering, sorting, and validation of the requested time range.
+
+The tests run without a live PostgreSQL database, an Airflow scheduler, or external data API calls. All 14 cases have passed locally in Docker and in GitHub Actions.
+
+## Continuous Integration (CI)
+
+GitHub Actions runs automated checks on pushes to `main` and pull requests targeting `main`. The workflow (`.github/workflows/python-app.yml`) uses two parallel jobs with separate Python 3.12 environments to avoid dependency conflicts between Airflow and dbt.
+
+| Job | Check | Purpose |
+|---|---|---|
+| `check-all` | Flake8 (critical checks) | Detect syntax errors and selected critical Python issues |
+| `check-all` | Flake8 (code quality) | Report style and complexity issues (currently non-blocking) |
+| `check-all` | Docker Compose validation | Validate configuration using placeholder environment values |
+| `check-all` | SQLFluff | Lint dbt SQL models using the PostgreSQL dialect and Jinja templating |
+| `check-all` | `dbt parse` | Validate dbt project structure and model dependencies without a database connection |
+| `python-tests` | Dependency validation | Install Airflow 2.10.5 with official constraints and check dependencies with `pip check` |
+| `python-tests` | pytest | Run Python unit tests; fail the job if tests fail or none are collected |
+
+Test dependencies are defined in `requirements-test.txt`, with pytest 8.3.5 installed separately by the workflow. Both jobs run on GitHub-hosted Linux runners.
+
+CI currently validates code, configuration, and selected ingestion logic. It does not execute dbt models or data tests against PostgreSQL, start the full Docker Compose stack, or deploy the application automatically.
+
 ## Additional Documentation
 
 - [Findings from weather data](docs/weather_data_findings.md): comparison of weather models with airport observations and notes on METAR data quality.
@@ -137,11 +170,14 @@ dbt test
 
 ```
 .
+├── .github/workflows/python-app.yml  # CI workflow
+├── .flake8                           # Python lint configuration
 ├── airflow/dags/
 │   ├── almaty_air_raw_sync.py
 │   ├── almaty_weather_metar_sync.py
 │   └── almaty_weather_openmeteo_sync.py
 ├── climate_data_dbt/
+│   ├── .sqlfluff                     # SQL lint configuration
 │   ├── macros/stg_air_quality_hourly.sql
 │   ├── models/
 │   │   ├── sources.yml
@@ -151,11 +187,14 @@ dbt test
 │   └── tests/
 │       ├── generic/generic_tests.sql # custom generic tests
 │       └── *.sql                     # singular tests
+├── tests/
+│   └── test_weather_metar.py         # Python unit tests
 ├── docs/                             # weather data findings, Airflow configuration screenshot, draft architecture files (not yet updated)
 ├── superset/                         # Superset configuration for the local environment
 ├── docker-compose.yaml
 ├── .env.example
 ├── environment.yml
+├── requirements-test.txt             # isolated Airflow test dependencies
 └── requirements.txt
 ```
 
@@ -199,12 +238,16 @@ Make sure the dbt profile points to the project's PostgreSQL database.
 - Run dbt from Airflow, including `dbt source freshness`.
 - Incremental dbt models and handling of late-arriving and updated source records.
 - Notifications on `warn` and `alert` results.
+- Extend Python unit tests to Open-Meteo and air quality ingestion; add PostgreSQL integration tests.
 
 **BI**
 
 - Apache Superset dashboards for air quality and climate trends, including a data quality dashboard based on the monitoring schema.
 
 **Technical debt**
+
+- Reduce cyclomatic complexity in the air quality and METAR ingestion DAGs, then make the full Flake8 code quality check blocking.
+- Review SQLFluff rule exceptions as the dbt models evolve.
 
 - Drop leftover legacy database objects (`almaty_hourly_weather`, `stg_almaty_weather`) if they still exist.
 - Keep a single dependency source (`environment.yml` or `requirements.txt`) and drop `requests-cache` from `_PIP_ADDITIONAL_REQUIREMENTS`.
