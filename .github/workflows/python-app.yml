@@ -46,8 +46,15 @@ jobs:
 
     # 3. Docker Compose: проверка валидности конфигурации
     - name: Validate Docker Compose
-      run: |
-        if [ -f docker-compose.yml ]; then docker compose -f docker-compose.yml config -q; fi
+      env:
+        AIRFLOW_DB_PASSWORD: ci_airflow_password
+        AIRFLOW_FERNET_KEY: ci_dummy_fernet_key
+        AIRFLOW_WEBSERVER_SECRET_KEY: ci_webserver_secret
+        WAREHOUSE_DB_PASSWORD: ci_warehouse_password
+        PGADMIN_EMAIL: ci@example.com
+        PGADMIN_PASSWORD: ci_pgadmin_password
+        AIRFLOW_ADMIN_PASSWORD: ci_admin_password
+      run: docker compose -f docker-compose.yaml config --quiet
 
     # 4. SQL: проверка стиля и синтаксиса SQL-файлов
     - name: SQL Lint (SQLFluff)
