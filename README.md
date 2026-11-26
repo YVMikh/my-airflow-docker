@@ -279,8 +279,6 @@ The free API is used for non-commercial purposes. Source data are processed, tra
 
 ### Airport Weather Observations — METAR
 
-### Airport Weather Observations — METAR
-
 - **Data access provider:** [Iowa Environmental Mesonet (IEM), Iowa State University](https://mesonet.agron.iastate.edu/).
 - **Data source:** Historical METAR observations from Almaty International Airport (UAAA).
 - **Data archive:** [IEM ASOS/AWOS/METAR Archive](https://mesonet.agron.iastate.edu/request/download.phtml).
