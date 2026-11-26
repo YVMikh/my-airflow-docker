@@ -37,7 +37,7 @@ The project implements an automated, multi-layer ELT pipeline. Airflow loads raw
 
 | Source | Content | Coverage |
 |---|---|---|
-| Air quality archives (`csv.gz`, GitHub) | 9 pollutants: PM2.5, PM10, NO2, NO, SO2, CO, O3, H2S, TSP | Station-level observations, grouped into geographical clusters |
+| [AirData.kz](https://airdata.kz) ([GitHub archives](https://github.com/qazybekb/AirDatakz-OpenData), `csv.gz`) | 9 pollutants: PM2.5, PM10, NO2, NO, SO2, CO, O3, H2S, TSP | Station-level observations, grouped into geographical clusters |
 | Open-Meteo archive API | Hourly weather for the point 43.2565, 76.9285 (UTC). Models: `ecmwf_ifs`, `era5`, `era5_land` | Since 2020-01-01 |
 | METAR reports, Almaty airport (UAAA, via Iowa Environmental Mesonet) | Observed weather at the airport | Since 2020-01-01 |
 
@@ -252,6 +252,43 @@ Make sure the dbt profile points to the project's PostgreSQL database.
 - Drop leftover legacy database objects (`almaty_hourly_weather`, `stg_almaty_weather`) if they still exist.
 - Keep a single dependency source (`environment.yml` or `requirements.txt`) and drop `requests-cache` from `_PIP_ADDITIONAL_REQUIREMENTS`.
 
+## Data Sources and Licensing
+
+## Data Sources and Licensing
+
+This project is developed for non-commercial and educational purposes. Source datasets are retrieved by the pipeline at runtime and are not redistributed in this repository.
+
+### Air Quality Data
+
+- **Provider:** [AirData.kz](https://airdata.kz) — Open Air Quality Dataset for Kazakhstan, Global Shapers Almaty Hub.
+- **Data repository:** [AirDatakz-OpenData](https://github.com/qazybekb/AirDatakz-OpenData).
+- **Licensing terms:** [AirDatakz-OpenData — License](https://github.com/qazybekb/AirDatakz-OpenData/blob/main/README.md#license).
+- **License:** [Creative Commons Attribution-NonCommercial 4.0 International (CC BY-NC 4.0)](https://creativecommons.org/licenses/by-nc/4.0/).
+- **Upstream sources:** According to the original dataset documentation, upstream source terms (KazHydroMet, OpenAQ, WAQI) also apply.
+
+The source data are filtered, aggregated by geographical cluster and hour, and transformed into analytical datasets.
+
+### Weather Data — Open-Meteo
+
+- **Provider:** [Open-Meteo](https://open-meteo.com/).
+- **Data source:** [Historical Weather API](https://open-meteo.com/en/docs/historical-weather-api).
+- **Models:** `ecmwf_ifs`, `era5`, `era5_land`.
+- **Terms of use:** [Open-Meteo Terms of Service](https://open-meteo.com/en/terms).
+- **Data license:** [Creative Commons Attribution 4.0 International (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/).
+- **Underlying data providers:** [ECMWF](https://www.ecmwf.int/) and [Copernicus Climate Change Service (C3S)](https://climate.copernicus.eu/).
+
+The free API is used for non-commercial purposes. Source data are processed, transformed and integrated with other data sources. Changes have been made to the original data.
+
+### Airport Weather Observations — METAR
+
+- **Data access provider:** [Iowa Environmental Mesonet (IEM)](https://mesonet.agron.iastate.edu/).
+- **Data source:** Historical METAR observations from Almaty International Airport (UAAA).
+- **Data archive:** [IEM ASOS/METAR Archive](https://mesonet.agron.iastate.edu/request/download.phtml).
+
+The observations are parsed, validated and transformed for integration with hourly weather and air quality data. Applicable licensing and redistribution terms have not yet been fully verified.
+
 ## Known Limitations
 
-- The license of the air quality data has not been verified yet.
+- Air quality data are subject to non-commercial use restrictions under CC BY-NC 4.0 and applicable upstream source terms.
+- Individual upstream source terms and METAR licensing and redistribution terms have not yet been fully verified.
+- Public redistribution of derived datasets and publication of public-facing dashboards require further review of the applicable data usage terms.
