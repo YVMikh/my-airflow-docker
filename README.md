@@ -254,8 +254,6 @@ Make sure the dbt profile points to the project's PostgreSQL database.
 
 ## Data Sources and Licensing
 
-## Data Sources and Licensing
-
 This project is developed for non-commercial and educational purposes. Source datasets are retrieved by the pipeline at runtime and are not redistributed in this repository.
 
 ### Air Quality Data
