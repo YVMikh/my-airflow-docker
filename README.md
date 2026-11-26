@@ -279,14 +279,21 @@ The free API is used for non-commercial purposes. Source data are processed, tra
 
 ### Airport Weather Observations — METAR
 
-- **Data access provider:** [Iowa Environmental Mesonet (IEM)](https://mesonet.agron.iastate.edu/).
-- **Data source:** Historical METAR observations from Almaty International Airport (UAAA).
-- **Data archive:** [IEM ASOS/METAR Archive](https://mesonet.agron.iastate.edu/request/download.phtml).
+### Airport Weather Observations — METAR
 
-The observations are parsed, validated and transformed for integration with hourly weather and air quality data. Applicable licensing and redistribution terms have not yet been fully verified.
+- **Data access provider:** [Iowa Environmental Mesonet (IEM), Iowa State University](https://mesonet.agron.iastate.edu/).
+- **Data source:** Historical METAR observations from Almaty International Airport (UAAA).
+- **Data archive:** [IEM ASOS/AWOS/METAR Archive](https://mesonet.agron.iastate.edu/request/download.phtml).
+- **Dataset documentation:** [IEM Datasets](https://mesonet.agron.iastate.edu/info/datasets/).
+- **Data usage status:** Public Domain, according to the IEM usage policy.
+- **Terms of use:** [IEM Disclaimer — Usage of IEM Products](https://mesonet1.agron.iastate.edu/disclaimer.php).
+
+Attribution to the Iowa Environmental Mesonet of Iowa State University is appreciated.
+The source observations are parsed, validated, cleaned and transformed for integration with hourly weather and air quality data.
 
 ## Known Limitations
 
 - Air quality data are subject to non-commercial use restrictions under CC BY-NC 4.0 and applicable upstream source terms.
-- Individual upstream source terms and METAR licensing and redistribution terms have not yet been fully verified.
-- Public redistribution of derived datasets and publication of public-facing dashboards require further review of the applicable data usage terms.
+- The free Open-Meteo API is used for non-commercial purposes.
+- Individual upstream data provider terms have not been independently verified.
+- Public redistribution of combined datasets requires a review of applicable source data usage terms.
